@@ -1,0 +1,6 @@
+{
+  "name": "Relatório Congregação",
+  "description": "Monitoramento de atividades ministeriais, cadastro de publicadores, controle de respostas e importação de planilhas e documentos Word.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
