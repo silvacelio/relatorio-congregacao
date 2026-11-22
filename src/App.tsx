@@ -350,6 +350,33 @@ export default function App() {
     notify(`${updated.name} atualizado.`);
   };
 
+  const handleSavePublisherPhone = async (
+    publisher: Publisher,
+    rawPhone: string,
+  ): Promise<boolean> => {
+    const cleanedPhone = rawPhone.trim();
+    const updated: Publisher = {
+      ...publisher,
+      phone: cleanedPhone.length > 0 ? cleanedPhone : undefined,
+    };
+
+    setPublishers((prev) => prev.map((p) => (p.id === updated.id ? updated : p)));
+
+    try {
+      await dbUpsertPublishers([updated]);
+      notify(
+        cleanedPhone
+          ? `WhatsApp de ${publisher.name} salvo.`
+          : `Número de ${publisher.name} removido.`,
+      );
+      return true;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Falha ao salvar no Supabase.';
+      notify(`Erro ao salvar telefone: ${msg}`, 'error');
+      return false;
+    }
+  };
+
   const handleDeletePublisher = (id: string) => {
     setPublishers((prev) => prev.filter((p) => p.id !== id));
     dbDeletePublisher(id).catch((err) =>
@@ -723,6 +750,7 @@ export default function App() {
                   publishers={publishers}
                   reports={reports}
                   onQuickRegister={(pub) => openNewReportModal(pub, null)}
+                  onSavePhone={handleSavePublisherPhone}
                   onNotify={notify}
                 />
               )}
