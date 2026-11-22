@@ -1,3 +1,5 @@
+import { PrivilegeType } from '../types';
+
 export function normalizeText(value: string): string {
   return value
     .normalize('NFD')
@@ -69,6 +71,10 @@ export function getMonthOptions(activeMonth: string, reportMonths: string[]): st
   }
 
   return Array.from(set).sort((a, b) => b.localeCompare(a));
+}
+
+export function isPioneerPrivilege(privilege?: PrivilegeType | null): boolean {
+  return privilege === 'Pioneiro Auxiliar' || privilege === 'Pioneiro Regular';
 }
 
 export function generateId(): string {

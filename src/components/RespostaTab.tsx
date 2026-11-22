@@ -62,13 +62,14 @@ export function RespostaTab({
     let participatedYes = 0;
     let totalHours = 0;
     let totalStudies = 0;
-    let auxPioneers = 0;
+    const regularPioneers = activePublishers.filter((p) => p.privilege === 'Pioneiro Regular').length;
+    const auxPioneers = activePublishers.filter((p) => p.privilege === 'Pioneiro Auxiliar').length;
+    const publishersOnly = activePublishers.filter((p) => p.privilege === 'Publicador').length;
 
     monthReports.forEach((r) => {
       if (r.participated) participatedYes += 1;
       if (typeof r.hours === 'number') totalHours += r.hours;
       if (typeof r.bibleStudies === 'number') totalStudies += r.bibleStudies;
-      if (r.auxiliaryPioneer && r.auxiliaryPioneer !== 'Não') auxPioneers += 1;
     });
 
     return {
@@ -81,6 +82,8 @@ export function RespostaTab({
       totalHours,
       totalStudies,
       auxPioneers,
+      regularPioneers,
+      publishersOnly,
     };
   }, [activePublishers, monthReports, reportByNormName]);
 
@@ -163,15 +166,8 @@ export function RespostaTab({
       <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg px-5 py-3 flex flex-wrap items-center justify-between gap-4 text-sm text-slate-600 dark:text-slate-400">
         <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
           <span>
-            Horas registradas:{' '}
-            <strong className="font-mono tabular-nums text-slate-900 dark:text-slate-100">{metrics.totalHours}</strong>
-          </span>
-          <span aria-hidden="true" className="text-slate-300 dark:text-slate-700">
-            ·
-          </span>
-          <span>
-            Estudos bíblicos:{' '}
-            <strong className="font-mono tabular-nums text-slate-900 dark:text-slate-100">{metrics.totalStudies}</strong>
+            Publicadores:{' '}
+            <strong className="font-mono tabular-nums text-slate-900 dark:text-slate-100">{metrics.publishersOnly}</strong>
           </span>
           <span aria-hidden="true" className="text-slate-300 dark:text-slate-700">
             ·
@@ -179,6 +175,27 @@ export function RespostaTab({
           <span>
             Pioneiros auxiliares:{' '}
             <strong className="font-mono tabular-nums text-slate-900 dark:text-slate-100">{metrics.auxPioneers}</strong>
+          </span>
+          <span aria-hidden="true" className="text-slate-300 dark:text-slate-700">
+            ·
+          </span>
+          <span>
+            Pioneiros regulares:{' '}
+            <strong className="font-mono tabular-nums text-slate-900 dark:text-slate-100">{metrics.regularPioneers}</strong>
+          </span>
+          <span aria-hidden="true" className="text-slate-300 dark:text-slate-700">
+            ·
+          </span>
+          <span>
+            Horas:{' '}
+            <strong className="font-mono tabular-nums text-slate-900 dark:text-slate-100">{metrics.totalHours}</strong>
+          </span>
+          <span aria-hidden="true" className="text-slate-300 dark:text-slate-700">
+            ·
+          </span>
+          <span>
+            Estudos:{' '}
+            <strong className="font-mono tabular-nums text-slate-900 dark:text-slate-100">{metrics.totalStudies}</strong>
           </span>
         </div>
         <div className="text-xs text-slate-500 dark:text-slate-400">

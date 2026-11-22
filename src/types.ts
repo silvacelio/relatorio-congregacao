@@ -1,7 +1,7 @@
 export type PrivilegeType =
   | 'Publicador'
-  | 'Pioneiro Regular'
   | 'Pioneiro Auxiliar'
+  | 'Pioneiro Regular'
   | 'Servo Ministerial'
   | 'Ancião';
 
@@ -22,11 +22,19 @@ export interface ActivityReport {
   timestamp: string; // ISO string or formatted timestamp
   publisherName: string;
   publisherId?: string;
+  privilegeSnapshot?: PrivilegeType;
   participated: boolean;
   hours: number | null;
   bibleStudies: number | null;
   auxiliaryPioneer: AuxiliaryPioneerOption;
   notes: string;
+}
+
+export interface PortalSettings {
+  id: string;
+  accessCode: string;
+  recoveryCode: string;
+  updatedAt?: string;
 }
 
 export type TabKey = 'resposta' | 'respostas' | 'cadastro' | 'quem_falta';

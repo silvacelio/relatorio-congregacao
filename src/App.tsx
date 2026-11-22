@@ -1,21 +1,26 @@
-import { Calendar, FileSpreadsheet, FileText, FileUp, Moon, Plus, Printer, Sun } from 'lucide-react';
+import { Calendar, FileSpreadsheet, FileText, FileUp, Moon, Plus, Printer, Settings, Sun } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
+import { AccessGate } from './components/AccessGate';
 import { CadastroTab } from './components/CadastroTab';
 import { ImportModal } from './components/ImportModal';
 import { QuemFaltaTab } from './components/QuemFaltaTab';
 import { ReportModal } from './components/ReportModal';
 import { RespostaTab } from './components/RespostaTab';
 import { RespostasFormTab } from './components/RespostasFormTab';
+import { SettingsModal } from './components/SettingsModal';
 import {
   DEFAULT_MONTH_KEY,
   INITIAL_PUBLISHERS,
   INITIAL_REPORTS,
 } from './data/initialData';
 import {
+  DEFAULT_PORTAL_SETTINGS,
   dbClearPublishers,
   dbDeletePublisher,
   dbDeleteReport,
   dbFetchAll,
+  dbFetchPortalSettings,
+  dbSavePortalSettings,
   dbUpsertPublishers,
   dbUpsertReports,
   isSupabaseConfigured,
@@ -24,6 +29,8 @@ import {
 import {
   ActivityReport,
   AuxiliaryPioneerOption,
+  PortalSettings,
+  PrivilegeType,
   Publisher,
   TabKey,
   ToastMessage,
@@ -42,6 +49,8 @@ const STORAGE_PUBLISHERS_KEY = 'relatorio_congregacao_publishers_v1';
 const STORAGE_REPORTS_KEY = 'relatorio_congregacao_reports_v1';
 const STORAGE_MONTH_KEY = 'relatorio_congregacao_month_v1';
 const STORAGE_THEME_KEY = 'relatorio_congregacao_theme_v1';
+const STORAGE_PORTAL_SETTINGS_KEY = 'relatorio_portal_settings_v1';
+const STORAGE_SESSION_UNLOCKED_KEY = 'relatorio_portal_unlocked_v1';
 
 function loadStored<T>(key: string, fallback: T): T {
   try {
@@ -93,8 +102,21 @@ export default function App() {
   const [modalInitialPublisher, setModalInitialPublisher] = useState<Publisher | null>(null);
   const [editingReport, setEditingReport] = useState<ActivityReport | null>(null);
   const [importModalOpen, setImportModalOpen] = useState(false);
+  const [settingsModalOpen, setSettingsModalOpen] = useState(false);
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
   const [loadingCloud, setLoadingCloud] = useState<boolean>(isSupabaseConfigured);
+
+  const [isUnlocked, setIsUnlocked] = useState<boolean>(() => {
+    try {
+      return sessionStorage.getItem(STORAGE_SESSION_UNLOCKED_KEY) === '1';
+    } catch {
+      return false;
+    }
+  });
+  const [portalSettings, setPortalSettings] = useState<PortalSettings>(() =>
+    loadStored<PortalSettings>(STORAGE_PORTAL_SETTINGS_KEY, DEFAULT_PORTAL_SETTINGS),
+  );
+  const [loadingSettings, setLoadingSettings] = useState<boolean>(isSupabaseConfigured);
 
   useEffect(() => {
     if (isSupabaseConfigured) return;
@@ -134,6 +156,23 @@ export default function App() {
   useEffect(() => {
     if (!isSupabaseConfigured || !supabase) return;
     let active = true;
+
+    dbFetchPortalSettings()
+      .then((settings) => {
+        if (!active) return;
+        setPortalSettings(settings);
+        try {
+          localStorage.setItem(STORAGE_PORTAL_SETTINGS_KEY, JSON.stringify(settings));
+        } catch {
+          // Ignore storage quota errors
+        }
+      })
+      .catch(() => {
+        // Fallback para padrão local caso offline ou tabela ainda não criada
+      })
+      .finally(() => {
+        if (active) setLoadingSettings(false);
+      });
 
     const loadFromSupabase = async () => {
       try {
@@ -188,6 +227,24 @@ export default function App() {
             .catch(() => {});
         },
       )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'portal_settings' },
+        () => {
+          dbFetchPortalSettings()
+            .then((settings) => {
+              if (active) {
+                setPortalSettings(settings);
+                try {
+                  localStorage.setItem(STORAGE_PORTAL_SETTINGS_KEY, JSON.stringify(settings));
+                } catch {
+                  // Ignore storage quota errors
+                }
+              }
+            })
+            .catch(() => {});
+        },
+      )
       .subscribe();
 
     return () => {
@@ -232,10 +289,57 @@ export default function App() {
     setReportModalOpen(true);
   };
 
+  const handleUnlock = () => {
+    try {
+      sessionStorage.setItem(STORAGE_SESSION_UNLOCKED_KEY, '1');
+    } catch {
+      // Ignore storage errors
+    }
+    setIsUnlocked(true);
+  };
+
+  const handleLockPortal = () => {
+    try {
+      sessionStorage.removeItem(STORAGE_SESSION_UNLOCKED_KEY);
+    } catch {
+      // Ignore storage errors
+    }
+    setSettingsModalOpen(false);
+    setIsUnlocked(false);
+  };
+
+  const handleSavePortalSettings = async (next: PortalSettings): Promise<boolean> => {
+    try {
+      if (isSupabaseConfigured) {
+        await dbSavePortalSettings(next);
+      }
+      setPortalSettings(next);
+      try {
+        localStorage.setItem(STORAGE_PORTAL_SETTINGS_KEY, JSON.stringify(next));
+      } catch {
+        // Ignore storage quota errors
+      }
+      notify('Códigos de acesso atualizados com sucesso.');
+      return true;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Erro ao salvar configurações.';
+      notify(`Erro ao salvar códigos: ${msg}`, 'error');
+      return false;
+    }
+  };
+
+  const handleUpdateAccessCode = async (newCode: string): Promise<boolean> => {
+    return handleSavePortalSettings({
+      ...portalSettings,
+      accessCode: newCode,
+    });
+  };
+
   const handleSaveReport = (
     data: {
       publisherName: string;
       publisherId?: string;
+      privilegeSnapshot: PrivilegeType;
       participated: boolean;
       hours: number | null;
       bibleStudies: number | null;
@@ -243,6 +347,7 @@ export default function App() {
       notes: string;
     },
     addToCadastroIfMissing: boolean,
+    newPublisherPrivilege: PrivilegeType,
   ) => {
     let resolvedPubId = data.publisherId;
 
@@ -251,7 +356,7 @@ export default function App() {
         id: generateId(),
         name: cleanDisplayName(data.publisherName),
         group: 'Grupo 1',
-        privilege: 'Publicador',
+        privilege: newPublisherPrivilege,
         active: true,
       };
       setPublishers((prev) => [...prev, newPub]);
@@ -264,6 +369,7 @@ export default function App() {
     if (editingReport) {
       const updatedReport: ActivityReport = {
         ...editingReport,
+        privilegeSnapshot: data.privilegeSnapshot,
         participated: data.participated,
         hours: data.hours,
         bibleStudies: data.bibleStudies,
@@ -286,6 +392,8 @@ export default function App() {
         const updatedReport: ActivityReport = {
           ...existingSameMonth,
           timestamp: new Date().toISOString(),
+          publisherId: resolvedPubId ?? existingSameMonth.publisherId,
+          privilegeSnapshot: data.privilegeSnapshot,
           participated: data.participated,
           hours: data.hours,
           bibleStudies: data.bibleStudies,
@@ -306,6 +414,7 @@ export default function App() {
           timestamp: new Date().toISOString(),
           publisherName: cleanDisplayName(data.publisherName),
           publisherId: resolvedPubId,
+          privilegeSnapshot: data.privilegeSnapshot,
           participated: data.participated,
           hours: data.hours,
           bibleStudies: data.bibleStudies,
@@ -473,6 +582,10 @@ export default function App() {
       );
     }
 
+    const pubByNorm = new Map<string, Publisher>();
+    publishers.forEach((p) => pubByNorm.set(normalizeText(p.name), p));
+    addedPublishers.forEach((p) => pubByNorm.set(normalizeText(p.name), p));
+
     const upsertedReports: ActivityReport[] = [];
     setReports((prev) => {
       const next = [...prev];
@@ -484,12 +597,15 @@ export default function App() {
         const idx = next.findIndex(
           (r) => r.monthKey === activeMonth && normalizeText(r.publisherName) === norm,
         );
+        const matchedPub = pubByNorm.get(norm);
 
         const reportPayload: ActivityReport = {
           id: idx >= 0 ? next[idx].id : generateId(),
           monthKey: activeMonth,
           timestamp: new Date().toISOString(),
           publisherName: cleaned,
+          publisherId: matchedPub?.id,
+          privilegeSnapshot: matchedPub?.privilege ?? row.privilege ?? 'Publicador',
           participated: row.participated ?? true,
           hours: row.hours ?? null,
           bibleStudies: row.bibleStudies ?? null,
@@ -534,6 +650,19 @@ export default function App() {
     (p) => p.active && submittedNormNames.has(normalizeText(p.name)),
   ).length;
   const pendingCount = activePublishersCount - receivedCount;
+
+  if (!isUnlocked) {
+    return (
+      <AccessGate
+        portalSettings={portalSettings}
+        loadingSettings={loadingSettings}
+        isDark={isDark}
+        onToggleDark={() => setIsDark((prev) => !prev)}
+        onUnlock={handleUnlock}
+        onUpdateAccessCode={handleUpdateAccessCode}
+      />
+    );
+  }
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-100 flex flex-col transition-colors">
@@ -691,6 +820,16 @@ export default function App() {
               {isDark ? <Sun className="w-3.5 h-3.5 text-amber-400" /> : <Moon className="w-3.5 h-3.5 text-slate-600" />}
               {isDark ? 'Modo Claro' : 'Modo Escuro'}
             </button>
+
+            <button
+              type="button"
+              onClick={() => setSettingsModalOpen(true)}
+              aria-label="Abrir configurações de acesso"
+              className="h-8 px-3 text-xs font-medium text-slate-700 dark:text-slate-200 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-md hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
+            >
+              <Settings className="w-3.5 h-3.5 text-slate-600 dark:text-slate-300" />
+              Configurações
+            </button>
           </div>
         </div>
 
@@ -723,6 +862,7 @@ export default function App() {
           {activeTab === 'respostas' && (
             <RespostasFormTab
               monthKey={activeMonth}
+              publishers={publishers}
               reports={reports}
               registeredNamesNorm={registeredNamesNorm}
               onAddReport={() => openNewReportModal(null, null)}
@@ -783,6 +923,15 @@ export default function App() {
           onClose={() => setImportModalOpen(false)}
           onImportToCadastro={handleImportToCadastro}
           onImportToReports={handleImportToReports}
+        />
+      )}
+
+      {settingsModalOpen && (
+        <SettingsModal
+          portalSettings={portalSettings}
+          onClose={() => setSettingsModalOpen(false)}
+          onSaveSettings={handleSavePortalSettings}
+          onLockPortal={handleLockPortal}
         />
       )}
 

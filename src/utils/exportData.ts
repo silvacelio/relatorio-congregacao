@@ -7,6 +7,15 @@ import {
   normalizeText,
 } from './formatters';
 
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 export function exportFullWorkbookXlsx(
   monthKey: string,
   publishers: Publisher[],
@@ -14,6 +23,8 @@ export function exportFullWorkbookXlsx(
 ): void {
   const monthReports = reports.filter((r) => r.monthKey === monthKey);
   const reportByNormName = new Map<string, ActivityReport>();
+  const pubByNormName = new Map<string, Publisher>();
+  publishers.forEach((p) => pubByNormName.set(normalizeText(p.name), p));
   monthReports.forEach((r) => {
     reportByNormName.set(normalizeText(r.publisherName), r);
   });
@@ -25,31 +36,32 @@ export function exportFullWorkbookXlsx(
     [
       'Carimbo de data/hora',
       'NOME',
+      'Privilégio (no mês)',
       'Marque se você participou esse mês',
-      'Horas (pioneiro regular)',
+      'Horas (pioneiro)',
       'Estudos Bíblicos',
-      'Pioneiro Auxiliar',
       'Observações',
     ],
     ...monthReports.map((r) => [
       formatTimestampPtBr(r.timestamp),
       r.publisherName,
+      r.privilegeSnapshot ?? pubByNormName.get(normalizeText(r.publisherName))?.privilege ?? 'Publicador',
       r.participated ? 'Sim' : 'Não',
       r.hours ?? '',
       r.bibleStudies ?? '',
-      r.auxiliaryPioneer === 'Não' ? '' : r.auxiliaryPioneer,
       r.notes ?? '',
     ]),
   ];
 
   // Sheet 2: CADASTRO
   const cadastroRows = [
-    ['CABEÇALHO', 'Grupo', 'Privilégio', 'Status Cadastro'],
+    ['CABEÇALHO', 'Grupo', 'Privilégio', 'Status Cadastro', 'WhatsApp'],
     ...publishers.map((p) => [
       p.name,
       p.group,
       p.privilege,
       p.active ? 'Ativo' : 'Inativo',
+      p.phone ?? '',
     ]),
   ];
 
@@ -80,8 +92,8 @@ export function exportFullWorkbookXlsx(
     (p) => !reportByNormName.has(normalizeText(p.name)),
   );
   const quemFaltaRows = [
-    ['NOME', 'Grupo', 'Privilégio'],
-    ...missingPublishers.map((p) => [p.name, p.group, p.privilege]),
+    ['NOME', 'Grupo', 'Privilégio', 'WhatsApp'],
+    ...missingPublishers.map((p) => [p.name, p.group, p.privilege, p.phone ?? '']),
   ];
 
   const wb = XLSX.utils.book_new();
@@ -116,6 +128,8 @@ export function exportReportToWord(
   const monthLabel = formatMonthLabel(monthKey);
   const monthReports = reports.filter((r) => r.monthKey === monthKey);
   const reportByNormName = new Map<string, ActivityReport>();
+  const pubByNormName = new Map<string, Publisher>();
+  publishers.forEach((p) => pubByNormName.set(normalizeText(p.name), p));
   monthReports.forEach((r) => reportByNormName.set(normalizeText(r.publisherName), r));
 
   const activePublishers = publishers.filter((p) => p.active);
@@ -137,7 +151,7 @@ export function exportReportToWord(
           xmlns="http://www.w3.org/TR/REC-html40">
     <head>
       <meta charset="utf-8" />
-      <title>Relatório Congregação — ${monthLabel}</title>
+      <title>Relatório Congregação — ${escapeHtml(monthLabel)}</title>
       <style>
         body { font-family: Calibri, Arial, sans-serif; color: #1e293b; font-size: 11pt; }
         h1 { font-size: 16pt; color: #0f172a; margin-bottom: 4px; }
@@ -151,7 +165,7 @@ export function exportReportToWord(
       </style>
     </head>
     <body>
-      <h1>Relatório de Atividades Ministeriais — ${monthLabel}</h1>
+      <h1>Relatório de Atividades Ministeriais — ${escapeHtml(monthLabel)}</h1>
       <p class="subtitle">Recebidas: ${receivedCount} | Pendentes: ${missingPublishers.length} | Total Ativos: ${activePublishers.length} (${pct})</p>
       ${
         mode === 'completo'
@@ -172,25 +186,29 @@ export function exportReportToWord(
           <tr>
             <th>Data/Hora</th>
             <th>Nome</th>
+            <th>Privilégio</th>
             <th>Participou</th>
             <th>Horas</th>
             <th>Estudos</th>
-            <th>Pioneiro Auxiliar</th>
             <th>Observações</th>
           </tr>
           ${monthReports
-            .map(
-              (r) => `
+            .map((r) => {
+              const priv =
+                r.privilegeSnapshot ??
+                pubByNormName.get(normalizeText(r.publisherName))?.privilege ??
+                'Publicador';
+              return `
             <tr>
-              <td>${formatTimestampPtBr(r.timestamp)}</td>
-              <td>${r.publisherName}</td>
+              <td>${escapeHtml(formatTimestampPtBr(r.timestamp))}</td>
+              <td>${escapeHtml(r.publisherName)}</td>
+              <td>${escapeHtml(priv)}</td>
               <td>${r.participated ? 'Sim' : 'Não'}</td>
               <td>${r.hours ?? '—'}</td>
               <td>${r.bibleStudies ?? '—'}</td>
-              <td>${r.auxiliaryPioneer}</td>
-              <td>${r.notes || '—'}</td>
-            </tr>`,
-            )
+              <td>${escapeHtml(r.notes || '—')}</td>
+            </tr>`;
+            })
             .join('')}
         </table>
       `
@@ -204,9 +222,9 @@ export function exportReportToWord(
             (p, i) => `
           <tr>
             <td>${i + 1}</td>
-            <td class="status-nao">${p.name}</td>
-            <td>${p.group}</td>
-            <td>${p.privilege}</td>
+            <td class="status-nao">${escapeHtml(p.name)}</td>
+            <td>${escapeHtml(p.group)}</td>
+            <td>${escapeHtml(p.privilege)}</td>
           </tr>`,
           )
           .join('')}

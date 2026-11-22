@@ -16,8 +16,8 @@ interface CadastroTabProps {
 
 const PRIVILEGES: PrivilegeType[] = [
   'Publicador',
-  'Pioneiro Regular',
   'Pioneiro Auxiliar',
+  'Pioneiro Regular',
   'Servo Ministerial',
   'Ancião',
 ];

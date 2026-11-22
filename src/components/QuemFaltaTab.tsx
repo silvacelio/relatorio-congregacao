@@ -1,6 +1,6 @@
 import { Check, CheckCheck, Copy, Download, FileText, MessageSquare, Save, Search } from 'lucide-react';
 import { useMemo, useState } from 'react';
-import { ActivityReport, Publisher } from '../types';
+import { ActivityReport, PrivilegeType, Publisher } from '../types';
 import { exportPendingCsv, exportReportToWord } from '../utils/exportData';
 import { formatMonthLabel, normalizeText } from '../utils/formatters';
 import {
@@ -16,6 +16,21 @@ interface QuemFaltaTabProps {
   onQuickRegister: (publisher: Publisher) => void;
   onSavePhone: (publisher: Publisher, phone: string) => Promise<boolean>;
   onNotify: (text: string, tone?: 'success' | 'error' | 'info') => void;
+}
+
+function getPrivilegeBadgeClasses(privilege: PrivilegeType): string {
+  switch (privilege) {
+    case 'Pioneiro Regular':
+      return 'bg-amber-100 dark:bg-amber-950/70 text-amber-900 dark:text-amber-300 border-amber-200 dark:border-amber-800';
+    case 'Pioneiro Auxiliar':
+      return 'bg-sky-100 dark:bg-sky-950/70 text-sky-900 dark:text-sky-300 border-sky-200 dark:border-sky-800';
+    case 'Ancião':
+      return 'bg-violet-100 dark:bg-violet-950/70 text-violet-900 dark:text-violet-300 border-violet-200 dark:border-violet-800';
+    case 'Servo Ministerial':
+      return 'bg-indigo-100 dark:bg-indigo-950/70 text-indigo-900 dark:text-indigo-300 border-indigo-200 dark:border-indigo-800';
+    default:
+      return 'bg-slate-100 dark:bg-slate-800 text-slate-800 dark:text-slate-200 border-slate-200 dark:border-slate-700';
+  }
 }
 
 export function QuemFaltaTab({
@@ -53,7 +68,23 @@ export function QuemFaltaTab({
     const pending = totalActive - received;
     const phonesCount = activePublishers.filter((p) => isValidWhatsAppPhone(p.phone)).length;
 
-    return { totalActive, received, pending, phonesCount };
+    const regularPioneers = activePublishers.filter((p) => p.privilege === 'Pioneiro Regular').length;
+    const auxPioneers = activePublishers.filter((p) => p.privilege === 'Pioneiro Auxiliar').length;
+    const publishersOnly = activePublishers.filter((p) => p.privilege === 'Publicador').length;
+    const eldersAndServants = activePublishers.filter(
+      (p) => p.privilege === 'Ancião' || p.privilege === 'Servo Ministerial',
+    ).length;
+
+    return {
+      totalActive,
+      received,
+      pending,
+      phonesCount,
+      regularPioneers,
+      auxPioneers,
+      publishersOnly,
+      eldersAndServants,
+    };
   }, [activePublishers, submittedNormNames]);
 
   const allMissing = useMemo(() => {
@@ -152,37 +183,25 @@ export function QuemFaltaTab({
         aria-label="Resumo do Mês"
         className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg overflow-hidden"
       >
-        <div className="px-4 py-3 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between gap-4">
+        <div className="px-4 py-3 border-b border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-2">
           <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
             📊 Resumo do Mês — {formatMonthLabel(monthKey)}
           </h2>
-          <span className="text-xs text-slate-500 dark:text-slate-400">
-            Atualização em tempo real
-          </span>
+          <div className="text-xs text-slate-500 dark:text-slate-400">
+            Total ativos:{' '}
+            <strong className="font-mono tabular-nums text-slate-900 dark:text-slate-100">
+              {summary.totalActive}
+            </strong>
+          </div>
         </div>
 
-        <div className="grid grid-cols-2 lg:grid-cols-4 divide-y lg:divide-y-0 lg:divide-x divide-slate-200 dark:divide-slate-800">
-          <div className="p-4">
-            <div className="text-xs font-medium text-slate-500 dark:text-slate-400">
-              Total de Publicadores
-            </div>
-            <div className="mt-1.5 text-2xl font-semibold text-slate-900 dark:text-slate-100 font-mono tabular-nums">
-              {summary.totalActive}
-            </div>
-            <div className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
-              ativos cadastrados
-            </div>
-          </div>
-
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 divide-y sm:divide-y-0 sm:divide-x divide-slate-200 dark:divide-slate-800">
           <div className="p-4">
             <div className="text-xs font-medium text-slate-500 dark:text-slate-400">
               ✅ Relatórios Recebidos
             </div>
             <div className="mt-1.5 text-2xl font-semibold text-emerald-700 dark:text-emerald-400 font-mono tabular-nums">
               {summary.received}
-            </div>
-            <div className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
-              enviados neste mês
             </div>
           </div>
 
@@ -193,8 +212,39 @@ export function QuemFaltaTab({
             <div className="mt-1.5 text-2xl font-semibold text-red-700 dark:text-red-400 font-mono tabular-nums">
               {summary.pending}
             </div>
-            <div className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
-              aguardando envio
+          </div>
+
+          <div className="p-4">
+            <div className="text-xs font-medium text-slate-500 dark:text-slate-400">
+              👥 Publicadores
+            </div>
+            <div className="mt-1.5 flex items-baseline gap-2">
+              <span className="text-2xl font-semibold text-slate-900 dark:text-slate-100 font-mono tabular-nums">
+                {summary.publishersOnly}
+              </span>
+              {summary.eldersAndServants > 0 && (
+                <span className="text-[11px] text-slate-500 dark:text-slate-400 whitespace-nowrap">
+                  +{summary.eldersAndServants} anc./servos
+                </span>
+              )}
+            </div>
+          </div>
+
+          <div className="p-4">
+            <div className="text-xs font-medium text-slate-500 dark:text-slate-400">
+              ✨ Pioneiros Auxiliares
+            </div>
+            <div className="mt-1.5 text-2xl font-semibold text-sky-700 dark:text-sky-400 font-mono tabular-nums">
+              {summary.auxPioneers}
+            </div>
+          </div>
+
+          <div className="p-4">
+            <div className="text-xs font-medium text-slate-500 dark:text-slate-400">
+              ⭐ Pioneiros Regulares
+            </div>
+            <div className="mt-1.5 text-2xl font-semibold text-amber-700 dark:text-amber-400 font-mono tabular-nums">
+              {summary.regularPioneers}
             </div>
           </div>
 
@@ -204,9 +254,6 @@ export function QuemFaltaTab({
             </div>
             <div className="mt-1.5 text-2xl font-semibold text-blue-700 dark:text-blue-400 font-mono tabular-nums">
               {summary.phonesCount}
-            </div>
-            <div className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
-              publicadores com WhatsApp
             </div>
           </div>
         </div>
@@ -317,9 +364,9 @@ export function QuemFaltaTab({
                 <tr className="bg-blue-700 dark:bg-blue-900 text-white text-xs font-semibold">
                   <th className="py-2.5 px-3 w-10 text-right font-mono">#</th>
                   <th className="py-2.5 px-3">NOME</th>
-                  <th className="py-2.5 px-3">Grupo</th>
-                  <th className="py-2.5 px-3 whitespace-nowrap">Status</th>
+                  <th className="py-2.5 px-3 whitespace-nowrap">Privilégio</th>
                   <th className="py-2.5 px-3 whitespace-nowrap">WhatsApp</th>
+                  <th className="py-2.5 px-3 whitespace-nowrap">Status</th>
                   <th className="py-2.5 px-3 text-right whitespace-nowrap">Ações</th>
                 </tr>
               </thead>
@@ -342,18 +389,22 @@ export function QuemFaltaTab({
                         {index + 1}
                       </td>
                       <td className="py-2.5 px-3 font-semibold text-red-950 dark:text-red-100">
-                        {pub.name}
-                      </td>
-                      <td className="py-2.5 px-3 text-xs text-red-800 dark:text-red-300 whitespace-nowrap">
-                        {pub.group}
+                        <div>{pub.name}</div>
+                        {pub.group && (
+                          <div className="text-[11px] font-normal text-red-800/80 dark:text-red-300/80">
+                            {pub.group}
+                          </div>
+                        )}
                       </td>
                       <td className="py-2.5 px-3 whitespace-nowrap">
-                        <span className="inline-block px-2 py-0.5 text-xs font-semibold bg-red-600 dark:bg-red-700 text-white rounded">
-                          ❌ Não Relatou
+                        <span
+                          className={`inline-block px-2 py-0.5 text-xs font-medium rounded border ${getPrivilegeBadgeClasses(pub.privilege)}`}
+                        >
+                          {pub.privilege}
                         </span>
                       </td>
                       <td className="py-2 px-3">
-                        <div className="flex items-center gap-1.5 min-w-[190px]">
+                        <div className="flex items-center gap-1.5 min-w-[180px]">
                           <input
                             type="tel"
                             inputMode="tel"
@@ -366,9 +417,14 @@ export function QuemFaltaTab({
                                 ? `wa.me/${normalizedPreview}`
                                 : 'Informe DDD + número'
                             }
-                            className="w-44 h-8 px-2.5 text-xs font-mono tabular-nums bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded text-slate-900 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-600"
+                            className="w-40 h-8 px-2.5 text-xs font-mono tabular-nums bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded text-slate-900 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-600"
                           />
                         </div>
+                      </td>
+                      <td className="py-2.5 px-3 whitespace-nowrap">
+                        <span className="inline-block px-2 py-0.5 text-xs font-semibold bg-red-600 dark:bg-red-700 text-white rounded">
+                          ❌ Não Relatou
+                        </span>
                       </td>
                       <td className="py-2 px-3 text-right">
                         <div className="inline-flex items-center justify-end gap-1.5">

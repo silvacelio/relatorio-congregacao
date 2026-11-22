@@ -1,10 +1,11 @@
 import { Pencil, Plus, Search, Trash2 } from 'lucide-react';
 import { useMemo, useState } from 'react';
-import { ActivityReport } from '../types';
+import { ActivityReport, PrivilegeType, Publisher } from '../types';
 import { formatMonthLabel, formatTimestampPtBr, normalizeText } from '../utils/formatters';
 
 interface RespostasFormTabProps {
   monthKey: string;
+  publishers: Publisher[];
   reports: ActivityReport[];
   registeredNamesNorm: Set<string>;
   onAddReport: () => void;
@@ -14,6 +15,7 @@ interface RespostasFormTabProps {
 
 export function RespostasFormTab({
   monthKey,
+  publishers,
   reports,
   registeredNamesNorm,
   onAddReport,
@@ -22,6 +24,12 @@ export function RespostasFormTab({
 }: RespostasFormTabProps) {
   const [search, setSearch] = useState('');
   const [sortBy, setSortBy] = useState<'recent' | 'name' | 'hours'>('recent');
+
+  const publisherByNormName = useMemo(() => {
+    const map = new Map<string, Publisher>();
+    publishers.forEach((p) => map.set(normalizeText(p.name), p));
+    return map;
+  }, [publishers]);
 
   const monthReports = useMemo(() => {
     const normQuery = normalizeText(search);
@@ -54,7 +62,7 @@ export function RespostasFormTab({
             Respostas ao Formulário — {formatMonthLabel(monthKey)}
           </h2>
           <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-            Registros individuais recebidos no mês, ordenados por envio ou nome.
+            Registros individuais recebidos no mês, preservando o privilégio histórico do momento do envio.
           </p>
         </div>
 
@@ -115,10 +123,10 @@ export function RespostasFormTab({
               <tr className="bg-violet-950 dark:bg-violet-950/90 text-white text-xs font-medium">
                 <th className="py-2.5 px-4 whitespace-nowrap">Carimbo de data/hora</th>
                 <th className="py-2.5 px-4 whitespace-nowrap">NOME</th>
+                <th className="py-2.5 px-4 whitespace-nowrap">Privilégio</th>
                 <th className="py-2.5 px-4 whitespace-nowrap">Participou esse mês</th>
                 <th className="py-2.5 px-4 text-right whitespace-nowrap">Horas (pioneiro)</th>
                 <th className="py-2.5 px-4 text-right whitespace-nowrap">Estudos Bíblicos</th>
-                <th className="py-2.5 px-4 whitespace-nowrap">Pioneiro Auxiliar</th>
                 <th className="py-2.5 px-4 whitespace-nowrap">Observações</th>
                 <th className="py-2.5 px-4 text-right whitespace-nowrap">Ações</th>
               </tr>
@@ -126,6 +134,10 @@ export function RespostasFormTab({
             <tbody className="divide-y divide-slate-100 dark:divide-slate-800/80 text-sm">
               {monthReports.map((report) => {
                 const isRegistered = registeredNamesNorm.has(normalizeText(report.publisherName));
+                const currentPub = publisherByNormName.get(normalizeText(report.publisherName));
+                const displayPrivilege: PrivilegeType =
+                  report.privilegeSnapshot ?? currentPub?.privilege ?? 'Publicador';
+
                 return (
                   <tr key={report.id} className="hover:bg-slate-50/80 dark:hover:bg-slate-800/50 transition-colors">
                     <td className="py-2.5 px-4 font-mono tabular-nums text-xs text-slate-600 dark:text-slate-400 whitespace-nowrap">
@@ -141,6 +153,9 @@ export function RespostasFormTab({
                         )}
                       </div>
                     </td>
+                    <td className="py-2.5 px-4 text-xs text-slate-700 dark:text-slate-300 whitespace-nowrap">
+                      {displayPrivilege}
+                    </td>
                     <td className="py-2.5 px-4">
                       {report.participated ? (
                         <span className="inline-block px-2 py-0.5 text-xs font-semibold bg-emerald-100 dark:bg-emerald-950/70 text-emerald-800 dark:text-emerald-300 rounded border border-emerald-200 dark:border-emerald-800">
@@ -153,13 +168,10 @@ export function RespostasFormTab({
                       )}
                     </td>
                     <td className="py-2.5 px-4 text-right font-mono tabular-nums text-slate-900 dark:text-slate-100">
-                      {report.hours !== null ? report.hours : ''}
+                      {report.hours !== null ? report.hours : '—'}
                     </td>
                     <td className="py-2.5 px-4 text-right font-mono tabular-nums text-slate-900 dark:text-slate-100">
-                      {report.bibleStudies !== null ? report.bibleStudies : ''}
-                    </td>
-                    <td className="py-2.5 px-4 text-xs text-slate-700 dark:text-slate-300">
-                      {report.auxiliaryPioneer === 'Não' ? '' : report.auxiliaryPioneer}
+                      {report.bibleStudies !== null ? report.bibleStudies : '—'}
                     </td>
                     <td className="py-2.5 px-4 text-xs text-slate-600 dark:text-slate-400 max-w-xs truncate" title={report.notes}>
                       {report.notes}

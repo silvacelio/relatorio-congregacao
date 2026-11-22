@@ -3,9 +3,15 @@ import { FormEvent, useMemo, useState } from 'react';
 import {
   ActivityReport,
   AuxiliaryPioneerOption,
+  PrivilegeType,
   Publisher,
 } from '../types';
-import { cleanDisplayName, formatMonthLabel, normalizeText } from '../utils/formatters';
+import {
+  cleanDisplayName,
+  formatMonthLabel,
+  isPioneerPrivilege,
+  normalizeText,
+} from '../utils/formatters';
 
 interface ReportModalProps {
   monthKey: string;
@@ -18,6 +24,7 @@ interface ReportModalProps {
     data: {
       publisherName: string;
       publisherId?: string;
+      privilegeSnapshot: PrivilegeType;
       participated: boolean;
       hours: number | null;
       bibleStudies: number | null;
@@ -25,10 +32,17 @@ interface ReportModalProps {
       notes: string;
     },
     addToCadastroIfMissing: boolean,
+    newPublisherPrivilege: PrivilegeType,
   ) => void;
 }
 
-const AUX_OPTIONS: AuxiliaryPioneerOption[] = ['Não', '15 horas', '30 horas', 'Contínuo'];
+const PRIVILEGES: PrivilegeType[] = [
+  'Publicador',
+  'Pioneiro Auxiliar',
+  'Pioneiro Regular',
+  'Servo Ministerial',
+  'Ancião',
+];
 
 export function ReportModal({
   monthKey,
@@ -42,6 +56,21 @@ export function ReportModal({
   const [name, setName] = useState(
     editingReport?.publisherName ?? initialPublisher?.name ?? '',
   );
+
+  const matchedPublisher = useMemo(() => {
+    const norm = normalizeText(name);
+    if (!norm) return undefined;
+    return publishers.find((p) => normalizeText(p.name) === norm);
+  }, [name, publishers]);
+
+  const [newPubPrivilege, setNewPubPrivilege] = useState<PrivilegeType>('Publicador');
+
+  const effectivePrivilege: PrivilegeType = editingReport
+    ? editingReport.privilegeSnapshot ?? matchedPublisher?.privilege ?? 'Publicador'
+    : matchedPublisher?.privilege ?? newPubPrivilege;
+
+  const isPioneer = isPioneerPrivilege(effectivePrivilege);
+
   const [participated, setParticipated] = useState<boolean>(
     editingReport ? editingReport.participated : true,
   );
@@ -55,18 +84,9 @@ export function ReportModal({
       ? String(editingReport.bibleStudies)
       : '',
   );
-  const [auxPioneer, setAuxPioneer] = useState<AuxiliaryPioneerOption>(
-    editingReport?.auxiliaryPioneer ?? 'Não',
-  );
   const [notes, setNotes] = useState<string>(editingReport?.notes ?? '');
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [addToCadastro, setAddToCadastro] = useState(true);
-
-  const matchedPublisher = useMemo(() => {
-    const norm = normalizeText(name);
-    if (!norm) return undefined;
-    return publishers.find((p) => normalizeText(p.name) === norm);
-  }, [name, publishers]);
 
   const suggestions = useMemo(() => {
     const norm = normalizeText(name);
@@ -87,22 +107,48 @@ export function ReportModal({
     const cleaned = cleanDisplayName(name);
     if (!cleaned) return;
 
-    const parsedHours = hoursStr.trim() === '' ? null : Math.max(0, Math.round(Number(hoursStr)));
-    const parsedStudies =
-      studiesStr.trim() === '' ? null : Math.max(0, Math.round(Number(studiesStr)));
+    if (isPioneer) {
+      const parsedHours = hoursStr.trim() === '' ? null : Math.max(0, Math.round(Number(hoursStr)));
+      const parsedStudies =
+        studiesStr.trim() === '' ? null : Math.max(0, Math.round(Number(studiesStr)));
 
-    onSave(
-      {
-        publisherName: cleaned,
-        publisherId: matchedPublisher?.id,
-        participated,
-        hours: Number.isFinite(parsedHours) ? parsedHours : null,
-        bibleStudies: Number.isFinite(parsedStudies) ? parsedStudies : null,
-        auxiliaryPioneer: auxPioneer,
-        notes: notes.trim(),
-      },
-      !matchedPublisher && addToCadastro,
-    );
+      const resolvedAux: AuxiliaryPioneerOption =
+        effectivePrivilege === 'Pioneiro Auxiliar'
+          ? editingReport?.auxiliaryPioneer && editingReport.auxiliaryPioneer !== 'Não'
+            ? editingReport.auxiliaryPioneer
+            : 'Contínuo'
+          : 'Não';
+
+      onSave(
+        {
+          publisherName: cleaned,
+          publisherId: matchedPublisher?.id,
+          privilegeSnapshot: effectivePrivilege,
+          participated: true,
+          hours: Number.isFinite(parsedHours) ? parsedHours : null,
+          bibleStudies: Number.isFinite(parsedStudies) ? parsedStudies : null,
+          auxiliaryPioneer: resolvedAux,
+          notes: notes.trim(),
+        },
+        !matchedPublisher && addToCadastro,
+        newPubPrivilege,
+      );
+    } else {
+      onSave(
+        {
+          publisherName: cleaned,
+          publisherId: matchedPublisher?.id,
+          privilegeSnapshot: effectivePrivilege,
+          participated,
+          hours: null,
+          bibleStudies: null,
+          auxiliaryPioneer: 'Não',
+          notes: notes.trim(),
+        },
+        !matchedPublisher && addToCadastro,
+        newPubPrivilege,
+      );
+    }
   };
 
   return (
@@ -167,13 +213,20 @@ export function ReportModal({
                       }}
                       className="w-full px-3 py-2 text-left text-xs hover:bg-blue-50 dark:hover:bg-blue-950/60 flex items-center justify-between gap-2 cursor-pointer"
                     >
-                      <span className="font-medium text-slate-900 dark:text-slate-100 truncate">{pub.name}</span>
-                      <span
-                        className={`shrink-0 font-medium ${
-                          alreadySent ? 'text-emerald-700 dark:text-emerald-400' : 'text-red-700 dark:text-red-400'
-                        }`}
-                      >
-                        {alreadySent ? 'Já enviou' : 'Pendente'}
+                      <span className="font-medium text-slate-900 dark:text-slate-100 truncate">
+                        {pub.name}
+                      </span>
+                      <span className="flex items-center gap-2 shrink-0">
+                        <span className="text-[11px] text-slate-500 dark:text-slate-400">
+                          {pub.privilege}
+                        </span>
+                        <span
+                          className={`font-medium ${
+                            alreadySent ? 'text-emerald-700 dark:text-emerald-400' : 'text-red-700 dark:text-red-400'
+                          }`}
+                        >
+                          {alreadySent ? 'Já enviou' : 'Pendente'}
+                        </span>
                       </span>
                     </button>
                   );
@@ -181,104 +234,146 @@ export function ReportModal({
               </div>
             )}
 
+            {/* Privilégio indicator */}
+            {(matchedPublisher || editingReport) && (
+              <div className="mt-2 flex items-center justify-between text-xs bg-slate-50 dark:bg-slate-800/70 border border-slate-200 dark:border-slate-700 rounded-md px-3 py-2">
+                <span className="text-slate-600 dark:text-slate-400">
+                  Privilégio {editingReport ? 'registrado neste mês' : 'no cadastro'}:
+                </span>
+                <span className="font-semibold text-slate-900 dark:text-slate-100">
+                  {effectivePrivilege}
+                </span>
+              </div>
+            )}
+
             {!editingReport && name.trim().length > 2 && !matchedPublisher && (
-              <label className="mt-2 flex items-center gap-2 text-xs text-slate-600 dark:text-slate-400 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={addToCadastro}
-                  onChange={(e) => setAddToCadastro(e.target.checked)}
-                  className="rounded border-slate-300 dark:border-slate-600 text-blue-700 focus:ring-blue-600"
-                />
-                <span>Adicionar este nome automaticamente ao Cadastro</span>
-              </label>
+              <div className="mt-2 space-y-2 bg-slate-50 dark:bg-slate-800/70 border border-slate-200 dark:border-slate-700 rounded-md p-3">
+                <label className="flex items-center gap-2 text-xs text-slate-700 dark:text-slate-300 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={addToCadastro}
+                    onChange={(e) => setAddToCadastro(e.target.checked)}
+                    className="rounded border-slate-300 dark:border-slate-600 text-blue-700 focus:ring-blue-600"
+                  />
+                  <span>Adicionar este nome automaticamente ao Cadastro</span>
+                </label>
+
+                <div className="flex items-center justify-between gap-2">
+                  <label
+                    htmlFor="new-pub-privilege"
+                    className="text-xs font-medium text-slate-600 dark:text-slate-400"
+                  >
+                    Privilégio:
+                  </label>
+                  <select
+                    id="new-pub-privilege"
+                    value={newPubPrivilege}
+                    onChange={(e) => setNewPubPrivilege(e.target.value as PrivilegeType)}
+                    className="h-8 px-2.5 text-xs bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded text-slate-900 dark:text-slate-100"
+                  >
+                    {PRIVILEGES.map((p) => (
+                      <option key={p} value={p}>
+                        {p}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
             )}
           </div>
 
-          {/* Participated */}
-          <div>
-            <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1.5">
-              Marque se você participou esse mês
-            </label>
-            <div className="grid grid-cols-2 gap-2">
-              <button
-                type="button"
-                onClick={() => setParticipated(true)}
-                className={`h-10 px-4 text-sm font-medium rounded-md border transition-colors cursor-pointer ${
-                  participated
-                    ? 'bg-emerald-50 dark:bg-emerald-950/60 border-emerald-500 text-emerald-900 dark:text-emerald-300'
-                    : 'bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700'
-                }`}
-              >
-                Sim (Participou)
-              </button>
-              <button
-                type="button"
-                onClick={() => setParticipated(false)}
-                className={`h-10 px-4 text-sm font-medium rounded-md border transition-colors cursor-pointer ${
-                  !participated
-                    ? 'bg-slate-100 dark:bg-slate-800 border-slate-500 text-slate-900 dark:text-slate-100'
-                    : 'bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700'
-                }`}
-              >
-                Não participou
-              </button>
-            </div>
-          </div>
-
-          {/* Hours, Studies, Aux Pioneer */}
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          {/* Campos adaptados pelo Privilégio */}
+          {!isPioneer ? (
             <div>
-              <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
-                Horas (Pioneiro)
+              <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1.5">
+                Participou da pregação este mês?
               </label>
-              <input
-                type="number"
-                min={0}
-                max={744}
-                value={hoursStr}
-                onChange={(e) => setHoursStr(e.target.value)}
-                placeholder="Ex.: 50"
-                className="w-full h-10 px-3 text-sm font-mono tabular-nums bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-md text-slate-900 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-600"
-              />
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setParticipated(true)}
+                  className={`h-10 px-4 text-sm font-medium rounded-md border transition-colors flex items-center justify-center gap-2 cursor-pointer ${
+                    participated
+                      ? 'bg-emerald-50 dark:bg-emerald-950/60 border-emerald-500 text-emerald-900 dark:text-emerald-300'
+                      : 'bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700'
+                  }`}
+                >
+                  <span
+                    className={`w-3.5 h-3.5 rounded-full border flex items-center justify-center ${
+                      participated
+                        ? 'border-emerald-600 dark:border-emerald-400'
+                        : 'border-slate-400'
+                    }`}
+                  >
+                    {participated && (
+                      <span className="w-2 h-2 rounded-full bg-emerald-600 dark:bg-emerald-400" />
+                    )}
+                  </span>
+                  Sim
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setParticipated(false)}
+                  className={`h-10 px-4 text-sm font-medium rounded-md border transition-colors flex items-center justify-center gap-2 cursor-pointer ${
+                    !participated
+                      ? 'bg-slate-100 dark:bg-slate-800 border-slate-500 text-slate-900 dark:text-slate-100'
+                      : 'bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700'
+                  }`}
+                >
+                  <span
+                    className={`w-3.5 h-3.5 rounded-full border flex items-center justify-center ${
+                      !participated
+                        ? 'border-slate-700 dark:border-slate-300'
+                        : 'border-slate-400'
+                    }`}
+                  >
+                    {!participated && (
+                      <span className="w-2 h-2 rounded-full bg-slate-700 dark:bg-slate-300" />
+                    )}
+                  </span>
+                  Não
+                </button>
+              </div>
             </div>
+          ) : (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
+                  Horas
+                </label>
+                <input
+                  type="number"
+                  min={0}
+                  max={744}
+                  value={hoursStr}
+                  onChange={(e) => setHoursStr(e.target.value)}
+                  placeholder="Ex.: 50"
+                  required
+                  className="w-full h-10 px-3 text-sm font-mono tabular-nums bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-md text-slate-900 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-600"
+                />
+              </div>
 
-            <div>
-              <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
-                Estudos Bíblicos
-              </label>
-              <input
-                type="number"
-                min={0}
-                max={100}
-                value={studiesStr}
-                onChange={(e) => setStudiesStr(e.target.value)}
-                placeholder="Ex.: 2"
-                className="w-full h-10 px-3 text-sm font-mono tabular-nums bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-md text-slate-900 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-600"
-              />
+              <div>
+                <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
+                  Estudos Bíblicos
+                </label>
+                <input
+                  type="number"
+                  min={0}
+                  max={100}
+                  value={studiesStr}
+                  onChange={(e) => setStudiesStr(e.target.value)}
+                  placeholder="Ex.: 2"
+                  className="w-full h-10 px-3 text-sm font-mono tabular-nums bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-md text-slate-900 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-600"
+                />
+              </div>
             </div>
-
-            <div>
-              <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
-                Pioneiro Auxiliar
-              </label>
-              <select
-                value={auxPioneer}
-                onChange={(e) => setAuxPioneer(e.target.value as AuxiliaryPioneerOption)}
-                className="w-full h-10 px-3 text-sm bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-md text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-600"
-              >
-                {AUX_OPTIONS.map((opt) => (
-                  <option key={opt} value={opt}>
-                    {opt}
-                  </option>
-                ))}
-              </select>
-            </div>
-          </div>
+          )}
 
           {/* Notes */}
           <div>
             <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
-              Observações
+              Observações (opcional)
             </label>
             <textarea
               rows={2}
