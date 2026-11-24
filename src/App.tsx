@@ -2,12 +2,14 @@ import { Calendar, FileSpreadsheet, FileText, FileUp, Moon, Plus, Printer, Setti
 import { useEffect, useMemo, useState } from 'react';
 import { AccessGate } from './components/AccessGate';
 import { CadastroTab } from './components/CadastroTab';
+import { GruposTab } from './components/GruposTab';
 import { ImportModal } from './components/ImportModal';
 import { QuemFaltaTab } from './components/QuemFaltaTab';
 import { ReportModal } from './components/ReportModal';
 import { RespostaTab } from './components/RespostaTab';
 import { RespostasFormTab } from './components/RespostasFormTab';
 import { SettingsModal } from './components/SettingsModal';
+import { VisitasTab } from './components/VisitasTab';
 import {
   DEFAULT_MONTH_KEY,
   INITIAL_PUBLISHERS,
@@ -15,23 +17,36 @@ import {
 } from './data/initialData';
 import {
   DEFAULT_PORTAL_SETTINGS,
+  DEFAULT_SERVICE_GROUPS,
+  DEFAULT_SERVICE_OVERSEER,
   dbClearPublishers,
+  dbDeleteGroupVisit,
   dbDeletePublisher,
   dbDeleteReport,
+  dbDeleteServiceGroup,
   dbFetchAll,
+  dbFetchGroupVisits,
   dbFetchPortalSettings,
+  dbFetchServiceGroups,
+  dbFetchServiceOverseer,
   dbSavePortalSettings,
+  dbSaveServiceOverseer,
+  dbUpsertGroupVisit,
   dbUpsertPublishers,
   dbUpsertReports,
+  dbUpsertServiceGroup,
   isSupabaseConfigured,
   supabase,
 } from './lib/supabase';
 import {
   ActivityReport,
   AuxiliaryPioneerOption,
+  GroupVisit,
   PortalSettings,
   PrivilegeType,
   Publisher,
+  ServiceGroup,
+  ServiceOverseerSettings,
   TabKey,
   ToastMessage,
 } from './types';
@@ -51,6 +66,9 @@ const STORAGE_MONTH_KEY = 'relatorio_congregacao_month_v1';
 const STORAGE_THEME_KEY = 'relatorio_congregacao_theme_v1';
 const STORAGE_PORTAL_SETTINGS_KEY = 'relatorio_portal_settings_v1';
 const STORAGE_SESSION_UNLOCKED_KEY = 'relatorio_portal_unlocked_v1';
+const STORAGE_GROUPS_KEY = 'relatorio_service_groups_v1';
+const STORAGE_OVERSEER_KEY = 'relatorio_service_overseer_v1';
+const STORAGE_VISITS_KEY = 'relatorio_group_visits_v1';
 
 function loadStored<T>(key: string, fallback: T): T {
   try {
@@ -67,7 +85,6 @@ function loadStoredPublishers(): Publisher[] {
     const raw = localStorage.getItem(STORAGE_PUBLISHERS_KEY);
     if (!raw) return INITIAL_PUBLISHERS;
     const parsed = JSON.parse(raw) as Publisher[];
-    // Auto-upgrade from earlier 20-name preview seed to complete 101-name official list
     if (
       Array.isArray(parsed) &&
       parsed.length === 20 &&
@@ -86,6 +103,15 @@ export default function App() {
   const [reports, setReports] = useState<ActivityReport[]>(() =>
     loadStored<ActivityReport[]>(STORAGE_REPORTS_KEY, INITIAL_REPORTS),
   );
+  const [serviceGroups, setServiceGroups] = useState<ServiceGroup[]>(() =>
+    loadStored<ServiceGroup[]>(STORAGE_GROUPS_KEY, DEFAULT_SERVICE_GROUPS),
+  );
+  const [overseerSettings, setOverseerSettings] = useState<ServiceOverseerSettings>(() =>
+    loadStored<ServiceOverseerSettings>(STORAGE_OVERSEER_KEY, DEFAULT_SERVICE_OVERSEER),
+  );
+  const [groupVisits, setGroupVisits] = useState<GroupVisit[]>(() =>
+    loadStored<GroupVisit[]>(STORAGE_VISITS_KEY, []),
+  );
   const [activeMonth, setActiveMonth] = useState<string>(() =>
     loadStored<string>(STORAGE_MONTH_KEY, DEFAULT_MONTH_KEY),
   );
@@ -97,7 +123,6 @@ export default function App() {
       return false;
     }
   });
-
   const [reportModalOpen, setReportModalOpen] = useState(false);
   const [modalInitialPublisher, setModalInitialPublisher] = useState<Publisher | null>(null);
   const [editingReport, setEditingReport] = useState<ActivityReport | null>(null);
@@ -105,7 +130,6 @@ export default function App() {
   const [settingsModalOpen, setSettingsModalOpen] = useState(false);
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
   const [loadingCloud, setLoadingCloud] = useState<boolean>(isSupabaseConfigured);
-
   const [isUnlocked, setIsUnlocked] = useState<boolean>(() => {
     try {
       return sessionStorage.getItem(STORAGE_SESSION_UNLOCKED_KEY) === '1';
@@ -135,6 +159,33 @@ export default function App() {
       // Ignore storage quota errors
     }
   }, [reports]);
+
+  useEffect(() => {
+    if (isSupabaseConfigured) return;
+    try {
+      localStorage.setItem(STORAGE_GROUPS_KEY, JSON.stringify(serviceGroups));
+    } catch {
+      // Ignore storage quota errors
+    }
+  }, [serviceGroups]);
+
+  useEffect(() => {
+    if (isSupabaseConfigured) return;
+    try {
+      localStorage.setItem(STORAGE_OVERSEER_KEY, JSON.stringify(overseerSettings));
+    } catch {
+      // Ignore storage quota errors
+    }
+  }, [overseerSettings]);
+
+  useEffect(() => {
+    if (isSupabaseConfigured) return;
+    try {
+      localStorage.setItem(STORAGE_VISITS_KEY, JSON.stringify(groupVisits));
+    } catch {
+      // Ignore storage quota errors
+    }
+  }, [groupVisits]);
 
   useEffect(() => {
     try {
@@ -178,7 +229,6 @@ export default function App() {
       try {
         const data = await dbFetchAll();
         if (!active) return;
-
         const alreadySeeded = localStorage.getItem('relatorio_supabase_seeded_v1') === '1';
         if (data.publishers.length === 0 && data.reports.length === 0 && !alreadySeeded) {
           await dbUpsertPublishers(INITIAL_PUBLISHERS);
@@ -201,7 +251,39 @@ export default function App() {
       }
     };
 
+    const loadGroupsAndVisits = async () => {
+      try {
+        const groups = await dbFetchServiceGroups();
+        if (!active) return;
+        const groupsSeeded = localStorage.getItem('relatorio_groups_seeded_v1') === '1';
+        if (groups.length === 0 && !groupsSeeded) {
+          await Promise.all(DEFAULT_SERVICE_GROUPS.map((g) => dbUpsertServiceGroup(g)));
+          localStorage.setItem('relatorio_groups_seeded_v1', '1');
+          if (active) setServiceGroups(DEFAULT_SERVICE_GROUPS);
+        } else {
+          setServiceGroups(groups);
+        }
+      } catch {
+        // Fallback para lista local se offline
+      }
+
+      try {
+        const overseer = await dbFetchServiceOverseer();
+        if (active) setOverseerSettings(overseer);
+      } catch {
+        // Fallback local
+      }
+
+      try {
+        const visits = await dbFetchGroupVisits();
+        if (active) setGroupVisits(visits);
+      } catch {
+        // Fallback local
+      }
+    };
+
     loadFromSupabase();
+    loadGroupsAndVisits();
 
     const channel = supabase
       .channel('congregacao-realtime')
@@ -241,6 +323,39 @@ export default function App() {
                   // Ignore storage quota errors
                 }
               }
+            })
+            .catch(() => {});
+        },
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'service_groups' },
+        () => {
+          dbFetchServiceGroups()
+            .then((groups) => {
+              if (active) setServiceGroups(groups);
+            })
+            .catch(() => {});
+        },
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'service_overseer_settings' },
+        () => {
+          dbFetchServiceOverseer()
+            .then((settings) => {
+              if (active) setOverseerSettings(settings);
+            })
+            .catch(() => {});
+        },
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'group_visits' },
+        () => {
+          dbFetchGroupVisits()
+            .then((visits) => {
+              if (active) setGroupVisits(visits);
             })
             .catch(() => {});
         },
@@ -350,12 +465,11 @@ export default function App() {
     newPublisherPrivilege: PrivilegeType,
   ) => {
     let resolvedPubId = data.publisherId;
-
     if (addToCadastroIfMissing && !registeredNamesNorm.has(normalizeText(data.publisherName))) {
       const newPub: Publisher = {
         id: generateId(),
         name: cleanDisplayName(data.publisherName),
-        group: 'Grupo 1',
+        group: 'Sem Grupo',
         privilege: newPublisherPrivilege,
         active: true,
       };
@@ -387,7 +501,6 @@ export default function App() {
           r.monthKey === activeMonth &&
           normalizeText(r.publisherName) === normalizeText(data.publisherName),
       );
-
       if (existingSameMonth) {
         const updatedReport: ActivityReport = {
           ...existingSameMonth,
@@ -468,9 +581,7 @@ export default function App() {
       ...publisher,
       phone: cleanedPhone.length > 0 ? cleanedPhone : undefined,
     };
-
     setPublishers((prev) => prev.map((p) => (p.id === updated.id ? updated : p)));
-
     try {
       await dbUpsertPublishers([updated]);
       notify(
@@ -513,21 +624,138 @@ export default function App() {
     notify('Lista oficial com 101 nomes restaurada.');
   };
 
+  const handleSaveServiceGroup = (group: ServiceGroup, previousName?: string) => {
+    const exists = serviceGroups.some((g) => g.id === group.id);
+    setServiceGroups((prev) =>
+      exists ? prev.map((g) => (g.id === group.id ? group : g)) : [...prev, group],
+    );
+    dbUpsertServiceGroup(group).catch((err) =>
+      notify(`Erro ao salvar grupo: ${err.message}`, 'error'),
+    );
+
+    if (previousName && previousName !== group.name) {
+      const affected: Publisher[] = [];
+      setPublishers((prev) =>
+        prev.map((p) => {
+          const matchesId = p.groupId === group.id;
+          const matchesLegacyName =
+            !p.groupId && normalizeText(p.group || '') === normalizeText(previousName);
+          if (matchesId || matchesLegacyName) {
+            const updated: Publisher = { ...p, group: group.name, groupId: group.id };
+            affected.push(updated);
+            return updated;
+          }
+          return p;
+        }),
+      );
+      if (affected.length > 0) {
+        dbUpsertPublishers(affected).catch(() => {});
+      }
+    }
+
+    notify(exists ? `Grupo "${group.name}" atualizado.` : `Grupo "${group.name}" criado.`);
+  };
+
+  const handleDeleteServiceGroup = (groupId: string) => {
+    const targetGroup = serviceGroups.find((g) => g.id === groupId);
+    setServiceGroups((prev) => prev.filter((g) => g.id !== groupId));
+    dbDeleteServiceGroup(groupId).catch((err) =>
+      notify(`Erro ao remover grupo: ${err.message}`, 'error'),
+    );
+
+    const affected: Publisher[] = [];
+    setPublishers((prev) =>
+      prev.map((p) => {
+        const matchesId = p.groupId === groupId;
+        const matchesName =
+          targetGroup && !p.groupId && normalizeText(p.group || '') === normalizeText(targetGroup.name);
+        if (matchesId || matchesName) {
+          const updated: Publisher = { ...p, group: 'Sem Grupo', groupId: undefined };
+          affected.push(updated);
+          return updated;
+        }
+        return p;
+      }),
+    );
+    if (affected.length > 0) {
+      dbUpsertPublishers(affected).catch(() => {});
+    }
+
+    notify('Grupo removido.', 'info');
+  };
+
+  const handleAssignPublisherGroup = (publisher: Publisher, group: ServiceGroup) => {
+    const updated: Publisher = {
+      ...publisher,
+      group: group.name,
+      groupId: group.id,
+    };
+    setPublishers((prev) => prev.map((p) => (p.id === updated.id ? updated : p)));
+    dbUpsertPublishers([updated]).catch((err) =>
+      notify(`Erro ao vincular publicador: ${err.message}`, 'error'),
+    );
+    notify(`${publisher.name} vinculado ao grupo ${group.name}.`);
+  };
+
+  const handleSaveOverseerSettings = (next: ServiceOverseerSettings) => {
+    setOverseerSettings(next);
+    dbSaveServiceOverseer(next).catch((err) =>
+      notify(`Erro ao salvar supervisor: ${err.message}`, 'error'),
+    );
+    notify('Configurações do Supervisor e Ciclo atualizadas.');
+  };
+
+  const handleSaveGroupVisit = (visit: GroupVisit) => {
+    const exists = groupVisits.some((v) => v.id === visit.id);
+    setGroupVisits((prev) =>
+      exists ? prev.map((v) => (v.id === visit.id ? visit : v)) : [visit, ...prev],
+    );
+    dbUpsertGroupVisit(visit).catch((err) =>
+      notify(`Erro ao salvar visita: ${err.message}`, 'error'),
+    );
+    notify(
+      visit.status === 'agendada'
+        ? 'Visita agendada com sucesso.'
+        : 'Visita registrada no histórico.',
+    );
+  };
+
+  const handleDeleteGroupVisit = (visitId: string) => {
+    setGroupVisits((prev) => prev.filter((v) => v.id !== visitId));
+    dbDeleteGroupVisit(visitId).catch((err) =>
+      notify(`Erro ao remover visita: ${err.message}`, 'error'),
+    );
+    notify('Registro de visita removido.', 'info');
+  };
+
+  const resolveImportedGroup = (rawGroup?: string): { group: string; groupId?: string } => {
+    const trimmed = (rawGroup || '').trim();
+    if (!trimmed) return { group: 'Sem Grupo' };
+    const matched = serviceGroups.find(
+      (g) => normalizeText(g.name) === normalizeText(trimmed),
+    );
+    if (matched) {
+      return { group: matched.name, groupId: matched.id };
+    }
+    return { group: trimmed };
+  };
+
   const handleImportToCadastro = (rows: ParsedRow[], mode: 'append' | 'replace') => {
     const seen = new Set<string>(
       mode === 'append' ? publishers.map((p) => normalizeText(p.name)) : [],
     );
-
     const newEntries: Publisher[] = [];
     rows.forEach((row) => {
       const cleaned = cleanDisplayName(row.name);
       const norm = normalizeText(cleaned);
       if (!cleaned || seen.has(norm)) return;
       seen.add(norm);
+      const resolved = resolveImportedGroup(row.group);
       newEntries.push({
         id: generateId(),
         name: cleaned,
-        group: row.group || 'Grupo 1',
+        group: resolved.group,
+        groupId: resolved.groupId,
         privilege: row.privilege || 'Publicador',
         active: true,
       });
@@ -549,7 +777,6 @@ export default function App() {
       );
       notify(`${newEntries.length} novos publicadores importados.`);
     }
-
     setImportModalOpen(false);
     setActiveTab('cadastro');
   };
@@ -557,17 +784,18 @@ export default function App() {
   const handleImportToReports = (rows: ParsedRow[], autoAddMissingToCadastro: boolean) => {
     const currentNormSet = new Set(publishers.map((p) => normalizeText(p.name)));
     const addedPublishers: Publisher[] = [];
-
     if (autoAddMissingToCadastro) {
       rows.forEach((row) => {
         const cleaned = cleanDisplayName(row.name);
         const norm = normalizeText(cleaned);
         if (cleaned && !currentNormSet.has(norm)) {
           currentNormSet.add(norm);
+          const resolved = resolveImportedGroup(row.group);
           addedPublishers.push({
             id: generateId(),
             name: cleaned,
-            group: row.group || 'Grupo 1',
+            group: resolved.group,
+            groupId: resolved.groupId,
             privilege: row.privilege || 'Publicador',
             active: true,
           });
@@ -593,12 +821,10 @@ export default function App() {
         const cleaned = cleanDisplayName(row.name);
         const norm = normalizeText(cleaned);
         if (!cleaned) return;
-
         const idx = next.findIndex(
           (r) => r.monthKey === activeMonth && normalizeText(r.publisherName) === norm,
         );
         const matchedPub = pubByNorm.get(norm);
-
         const reportPayload: ActivityReport = {
           id: idx >= 0 ? next[idx].id : generateId(),
           monthKey: activeMonth,
@@ -612,7 +838,6 @@ export default function App() {
           auxiliaryPioneer: row.auxiliaryPioneer ?? 'Não',
           notes: row.notes ?? '',
         };
-
         upsertedReports.push(reportPayload);
         if (idx >= 0) {
           next[idx] = reportPayload;
@@ -643,6 +868,8 @@ export default function App() {
     { key: 'respostas', label: 'Respostas ao Formulário' },
     { key: 'cadastro', label: 'Cadastro' },
     { key: 'quem_falta', label: 'Quem Falta' },
+    { key: 'grupos', label: 'Por Grupo' },
+    { key: 'visitas', label: 'Visitas' },
   ];
 
   const activePublishersCount = publishers.filter((p) => p.active).length;
@@ -666,7 +893,6 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-100 flex flex-col transition-colors">
-      {/* Top Bar Contract: [Brand title] — [4 nav links] — [1 primary action] */}
       <header className="no-print bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 sticky top-0 z-30">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-8">
           <a
@@ -737,14 +963,15 @@ export default function App() {
         </div>
       </header>
 
-      {/* Main Content Container */}
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 py-6 space-y-6">
-        {/* Workspace Toolbar (Month Selector + Word/Excel Import & Export + Theme Toggle) */}
         <div className="no-print bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg px-4 py-3 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
           <div className="flex flex-wrap items-center gap-4">
             <div className="flex items-center gap-2">
               <Calendar className="w-4 h-4 text-slate-500 dark:text-slate-400 shrink-0" />
-              <label htmlFor="month-select" className="text-xs font-medium text-slate-600 dark:text-slate-400 whitespace-nowrap">
+              <label
+                htmlFor="month-select"
+                className="text-xs font-medium text-slate-600 dark:text-slate-400 whitespace-nowrap"
+              >
                 Mês de referência:
               </label>
               <select
@@ -783,7 +1010,6 @@ export default function App() {
               <FileUp className="w-3.5 h-3.5" />
               Importar Word / Planilha
             </button>
-
             <button
               type="button"
               onClick={() => exportFullWorkbookXlsx(activeMonth, publishers, reports)}
@@ -792,7 +1018,6 @@ export default function App() {
               <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-700 dark:text-emerald-400" />
               Exportar Excel
             </button>
-
             <button
               type="button"
               onClick={() => exportReportToWord(activeMonth, publishers, reports, 'completo')}
@@ -801,7 +1026,6 @@ export default function App() {
               <FileText className="w-3.5 h-3.5 text-blue-700 dark:text-blue-400" />
               Exportar Word
             </button>
-
             <button
               type="button"
               onClick={() => window.print()}
@@ -810,7 +1034,6 @@ export default function App() {
               <Printer className="w-3.5 h-3.5" />
               Imprimir
             </button>
-
             <button
               type="button"
               onClick={() => setIsDark((prev) => !prev)}
@@ -820,7 +1043,6 @@ export default function App() {
               {isDark ? <Sun className="w-3.5 h-3.5 text-amber-400" /> : <Moon className="w-3.5 h-3.5 text-slate-600" />}
               {isDark ? 'Modo Claro' : 'Modo Escuro'}
             </button>
-
             <button
               type="button"
               onClick={() => setSettingsModalOpen(true)}
@@ -833,7 +1055,6 @@ export default function App() {
           </div>
         </div>
 
-        {/* Active Tab Viewport */}
         <div className="print-container">
           {loadingCloud ? (
             <div className="space-y-4">
@@ -858,32 +1079,30 @@ export default function App() {
                   onOpenImport={() => setImportModalOpen(true)}
                 />
               )}
-
-          {activeTab === 'respostas' && (
-            <RespostasFormTab
-              monthKey={activeMonth}
-              publishers={publishers}
-              reports={reports}
-              registeredNamesNorm={registeredNamesNorm}
-              onAddReport={() => openNewReportModal(null, null)}
-              onEditReport={(rep) => openNewReportModal(null, rep)}
-              onDeleteReport={handleDeleteReport}
-            />
-          )}
-
-          {activeTab === 'cadastro' && (
-            <CadastroTab
-              publishers={publishers}
-              submittedNormNames={submittedNormNames}
-              onAddPublisher={handleAddPublisher}
-              onUpdatePublisher={handleUpdatePublisher}
-              onDeletePublisher={handleDeletePublisher}
-              onClearAllPublishers={handleClearAllPublishers}
-              onRestoreDefaultList={handleRestoreDefaultList}
-              onOpenImport={() => setImportModalOpen(true)}
-            />
-          )}
-
+              {activeTab === 'respostas' && (
+                <RespostasFormTab
+                  monthKey={activeMonth}
+                  publishers={publishers}
+                  reports={reports}
+                  registeredNamesNorm={registeredNamesNorm}
+                  onAddReport={() => openNewReportModal(null, null)}
+                  onEditReport={(rep) => openNewReportModal(null, rep)}
+                  onDeleteReport={handleDeleteReport}
+                />
+              )}
+              {activeTab === 'cadastro' && (
+                <CadastroTab
+                  publishers={publishers}
+                  serviceGroups={serviceGroups}
+                  submittedNormNames={submittedNormNames}
+                  onAddPublisher={handleAddPublisher}
+                  onUpdatePublisher={handleUpdatePublisher}
+                  onDeletePublisher={handleDeletePublisher}
+                  onClearAllPublishers={handleClearAllPublishers}
+                  onRestoreDefaultList={handleRestoreDefaultList}
+                  onOpenImport={() => setImportModalOpen(true)}
+                />
+              )}
               {activeTab === 'quem_falta' && (
                 <QuemFaltaTab
                   monthKey={activeMonth}
@@ -894,12 +1113,36 @@ export default function App() {
                   onNotify={notify}
                 />
               )}
+              {activeTab === 'grupos' && (
+                <GruposTab
+                  monthKey={activeMonth}
+                  publishers={publishers}
+                  reports={reports}
+                  serviceGroups={serviceGroups}
+                  onSaveGroup={handleSaveServiceGroup}
+                  onDeleteGroup={handleDeleteServiceGroup}
+                  onAssignPublisherGroup={handleAssignPublisherGroup}
+                  onQuickRegister={(pub) => openNewReportModal(pub, null)}
+                  onSavePhone={handleSavePublisherPhone}
+                  onNotify={notify}
+                />
+              )}
+              {activeTab === 'visitas' && (
+                <VisitasTab
+                  serviceGroups={serviceGroups}
+                  overseerSettings={overseerSettings}
+                  groupVisits={groupVisits}
+                  onSaveOverseerSettings={handleSaveOverseerSettings}
+                  onSaveVisit={handleSaveGroupVisit}
+                  onDeleteVisit={handleDeleteGroupVisit}
+                  onNotify={notify}
+                />
+              )}
             </>
           )}
         </div>
       </main>
 
-      {/* Modals */}
       {reportModalOpen && (
         <ReportModal
           monthKey={activeMonth}
@@ -935,7 +1178,6 @@ export default function App() {
         />
       )}
 
-      {/* Toast Notifications */}
       {toasts.length > 0 && (
         <div className="no-print fixed bottom-4 right-4 z-50 flex flex-col gap-2 max-w-sm">
           {toasts.map((toast) => (
