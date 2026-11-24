@@ -11,6 +11,7 @@ export interface Publisher {
   id: string;
   name: string;
   group: string;
+  groupId?: string;
   privilege: PrivilegeType;
   active: boolean;
   phone?: string;
@@ -37,7 +38,42 @@ export interface PortalSettings {
   updatedAt?: string;
 }
 
-export type TabKey = 'resposta' | 'respostas' | 'cadastro' | 'quem_falta';
+export interface ServiceGroup {
+  id: string;
+  name: string;
+  overseerName: string;
+  overseerWhatsapp: string;
+  notes: string;
+  sortOrder: number;
+}
+
+export interface ServiceOverseerSettings {
+  id: string;
+  supervisorName: string;
+  supervisorWhatsapp: string;
+  cycleLabel: string;
+  cycleStartDate: string;
+}
+
+export type GroupVisitStatus = 'realizada' | 'agendada';
+
+export interface GroupVisit {
+  id: string;
+  groupId: string;
+  groupNameSnapshot: string;
+  visitDate: string; // YYYY-MM-DD
+  visitorName: string;
+  notes: string;
+  status: GroupVisitStatus;
+}
+
+export type TabKey =
+  | 'resposta'
+  | 'respostas'
+  | 'cadastro'
+  | 'quem_falta'
+  | 'grupos'
+  | 'visitas';
 
 export interface ToastMessage {
   id: string;
