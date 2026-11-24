@@ -1,10 +1,11 @@
 import { Check, FileUp, Pencil, Plus, Search, Trash2, X } from 'lucide-react';
 import { FormEvent, useMemo, useState } from 'react';
-import { PrivilegeType, Publisher } from '../types';
+import { PrivilegeType, Publisher, ServiceGroup } from '../types';
 import { cleanDisplayName, normalizeText } from '../utils/formatters';
 
 interface CadastroTabProps {
   publishers: Publisher[];
+  serviceGroups?: ServiceGroup[];
   submittedNormNames: Set<string>;
   onAddPublisher: (pub: Omit<Publisher, 'id'>) => void;
   onUpdatePublisher: (pub: Publisher) => void;
@@ -24,6 +25,7 @@ const PRIVILEGES: PrivilegeType[] = [
 
 export function CadastroTab({
   publishers,
+  serviceGroups = [],
   submittedNormNames,
   onAddPublisher,
   onUpdatePublisher,
@@ -34,41 +36,65 @@ export function CadastroTab({
 }: CadastroTabProps) {
   const [search, setSearch] = useState('');
   const [newName, setNewName] = useState('');
-  const [newGroup, setNewGroup] = useState('Grupo 1');
+  const [newGroupId, setNewGroupId] = useState('');
   const [newPrivilege, setNewPrivilege] = useState<PrivilegeType>('Publicador');
-
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState('');
-  const [editGroup, setEditGroup] = useState('');
+  const [editGroupId, setEditGroupId] = useState('');
+  const [editLegacyGroup, setEditLegacyGroup] = useState('');
   const [editPrivilege, setEditPrivilege] = useState<PrivilegeType>('Publicador');
-
   const [confirmClear, setConfirmClear] = useState(false);
+
+  const orderedGroups = useMemo(
+    () =>
+      [...serviceGroups].sort(
+        (a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name, 'pt-BR'),
+      ),
+    [serviceGroups],
+  );
+
+  const groupById = useMemo(() => {
+    const map = new Map<string, ServiceGroup>();
+    orderedGroups.forEach((g) => map.set(g.id, g));
+    return map;
+  }, [orderedGroups]);
+
+  const resolveGroupName = (pub: Publisher): string => {
+    if (pub.groupId) {
+      const found = groupById.get(pub.groupId);
+      if (found) return found.name;
+    }
+    return pub.group || 'Sem Grupo';
+  };
 
   const sortedPublishers = useMemo(() => {
     const normQuery = normalizeText(search);
     return [...publishers]
       .filter((p) => {
         if (!normQuery) return true;
+        const resolvedGroup = resolveGroupName(p);
         return (
           normalizeText(p.name).includes(normQuery) ||
-          normalizeText(p.group).includes(normQuery) ||
+          normalizeText(resolvedGroup).includes(normQuery) ||
           normalizeText(p.privilege).includes(normQuery)
         );
       })
       .sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'));
-  }, [publishers, search]);
+  }, [publishers, search, groupById]);
 
   const handleAddSubmit = (e: FormEvent) => {
     e.preventDefault();
     const cleaned = cleanDisplayName(newName);
     if (!cleaned) return;
-
     const alreadyExists = publishers.some((p) => normalizeText(p.name) === normalizeText(cleaned));
     if (alreadyExists) return;
 
+    const chosenGroup = newGroupId ? groupById.get(newGroupId) : undefined;
+
     onAddPublisher({
       name: cleaned,
-      group: newGroup.trim() || 'Sem Grupo',
+      group: chosenGroup ? chosenGroup.name : 'Sem Grupo',
+      groupId: chosenGroup ? chosenGroup.id : undefined,
       privilege: newPrivilege,
       active: true,
     });
@@ -78,17 +104,52 @@ export function CadastroTab({
   const startEdit = (pub: Publisher) => {
     setEditingId(pub.id);
     setEditName(pub.name);
-    setEditGroup(pub.group);
     setEditPrivilege(pub.privilege);
+
+    if (pub.groupId && groupById.has(pub.groupId)) {
+      setEditGroupId(pub.groupId);
+      setEditLegacyGroup('');
+      return;
+    }
+
+    const matchedByName = orderedGroups.find(
+      (g) => normalizeText(g.name) === normalizeText(pub.group || ''),
+    );
+    if (matchedByName) {
+      setEditGroupId(matchedByName.id);
+      setEditLegacyGroup('');
+    } else if (pub.group && normalizeText(pub.group) !== 'SEM GRUPO') {
+      setEditGroupId('__legacy__');
+      setEditLegacyGroup(pub.group);
+    } else {
+      setEditGroupId('');
+      setEditLegacyGroup('');
+    }
   };
 
   const saveEdit = (pub: Publisher) => {
     const cleaned = cleanDisplayName(editName);
     if (!cleaned) return;
+
+    let nextGroup = 'Sem Grupo';
+    let nextGroupId: string | undefined;
+
+    if (editGroupId === '__legacy__') {
+      nextGroup = editLegacyGroup || pub.group || 'Sem Grupo';
+      nextGroupId = undefined;
+    } else if (editGroupId) {
+      const chosen = groupById.get(editGroupId);
+      if (chosen) {
+        nextGroup = chosen.name;
+        nextGroupId = chosen.id;
+      }
+    }
+
     onUpdatePublisher({
       ...pub,
       name: cleaned,
-      group: editGroup.trim() || 'Sem Grupo',
+      group: nextGroup,
+      groupId: nextGroupId,
       privilege: editPrivilege,
     });
     setEditingId(null);
@@ -98,7 +159,6 @@ export function CadastroTab({
 
   return (
     <div className="space-y-6">
-      {/* Add Single Publisher Form */}
       <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-5">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
           <div>
@@ -142,20 +202,23 @@ export function CadastroTab({
               className="w-full h-9 px-3 text-sm bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-md text-slate-900 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-600"
             />
           </div>
-
           <div className="md:col-span-3">
             <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">
               Grupo de Serviço
             </label>
-            <input
-              type="text"
-              value={newGroup}
-              onChange={(e) => setNewGroup(e.target.value)}
-              placeholder="Grupo 1"
-              className="w-full h-9 px-3 text-sm bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-md text-slate-900 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-600"
-            />
+            <select
+              value={newGroupId}
+              onChange={(e) => setNewGroupId(e.target.value)}
+              className="w-full h-9 px-3 text-sm bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-md text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-600"
+            >
+              <option value="">Sem Grupo</option>
+              {orderedGroups.map((g) => (
+                <option key={g.id} value={g.id}>
+                  {g.name}
+                </option>
+              ))}
+            </select>
           </div>
-
           <div className="md:col-span-2">
             <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">
               Privilégio
@@ -172,7 +235,6 @@ export function CadastroTab({
               ))}
             </select>
           </div>
-
           <div className="md:col-span-2 flex items-end">
             <button
               type="submit"
@@ -185,7 +247,6 @@ export function CadastroTab({
         </form>
       </section>
 
-      {/* Master List Table */}
       <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg overflow-hidden">
         <div className="p-4 border-b border-slate-200 dark:border-slate-800 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
           <div className="flex items-center gap-3 text-sm text-slate-700 dark:text-slate-300">
@@ -197,7 +258,6 @@ export function CadastroTab({
               {activeCount} ativos / {publishers.length} total
             </span>
           </div>
-
           <div className="flex flex-wrap items-center gap-2">
             <div className="relative w-full sm:w-64">
               <Search className="w-4 h-4 text-slate-400 dark:text-slate-500 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
@@ -269,7 +329,6 @@ export function CadastroTab({
                 {sortedPublishers.map((pub, index) => {
                   const isEditing = editingId === pub.id;
                   const hasReported = submittedNormNames.has(normalizeText(pub.name));
-
                   return (
                     <tr key={pub.id} className="hover:bg-slate-50/80 dark:hover:bg-slate-800/50 transition-colors">
                       <td className="py-2.5 px-4 text-right text-xs text-slate-400 dark:text-slate-500 font-mono tabular-nums">
@@ -289,14 +348,25 @@ export function CadastroTab({
                       </td>
                       <td className="py-2.5 px-4 text-xs text-slate-600 dark:text-slate-400">
                         {isEditing ? (
-                          <input
-                            type="text"
-                            value={editGroup}
-                            onChange={(e) => setEditGroup(e.target.value)}
-                            className="w-28 h-8 px-2 text-xs bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 border border-blue-400 dark:border-blue-500 rounded focus:outline-none focus:ring-2 focus:ring-blue-600"
-                          />
+                          <select
+                            value={editGroupId}
+                            onChange={(e) => setEditGroupId(e.target.value)}
+                            className="h-8 px-2 text-xs bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 border border-blue-400 dark:border-blue-500 rounded focus:outline-none focus:ring-2 focus:ring-blue-600"
+                          >
+                            {editLegacyGroup && (
+                              <option value="__legacy__">
+                                Atual ({editLegacyGroup})
+                              </option>
+                            )}
+                            <option value="">Sem Grupo</option>
+                            {orderedGroups.map((g) => (
+                              <option key={g.id} value={g.id}>
+                                {g.name}
+                              </option>
+                            ))}
+                          </select>
                         ) : (
-                          pub.group
+                          resolveGroupName(pub)
                         )}
                       </td>
                       <td className="py-2.5 px-4 text-xs text-slate-600 dark:text-slate-400">
