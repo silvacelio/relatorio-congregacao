@@ -2,9 +2,13 @@ import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import {
   ActivityReport,
   AuxiliaryPioneerOption,
+  GroupVisit,
+  GroupVisitStatus,
   PortalSettings,
   PrivilegeType,
   Publisher,
+  ServiceGroup,
+  ServiceOverseerSettings,
 } from '../types';
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string | undefined;
@@ -24,10 +28,27 @@ export const DEFAULT_PORTAL_SETTINGS: PortalSettings = {
   recoveryCode: 'CelioJDR2026',
 };
 
+export const DEFAULT_SERVICE_GROUPS: ServiceGroup[] = [
+  { id: 'grp-salao-1', name: 'Salão do Reino 1', overseerName: '', overseerWhatsapp: '', notes: '', sortOrder: 1 },
+  { id: 'grp-salao-2', name: 'Salão do Reino 2', overseerName: '', overseerWhatsapp: '', notes: '', sortOrder: 2 },
+  { id: 'grp-jose-dos-reis', name: 'José dos Reis', overseerName: '', overseerWhatsapp: '', notes: '', sortOrder: 3 },
+  { id: 'grp-fernao-cardim', name: 'Fernão Cardim', overseerName: '', overseerWhatsapp: '', notes: '', sortOrder: 4 },
+  { id: 'grp-mario-carpenter', name: 'Mário Carpenter', overseerName: '', overseerWhatsapp: '', notes: '', sortOrder: 5 },
+];
+
+export const DEFAULT_SERVICE_OVERSEER: ServiceOverseerSettings = {
+  id: 'default',
+  supervisorName: 'Aílton Brandão',
+  supervisorWhatsapp: '',
+  cycleLabel: 'Ciclo Atual',
+  cycleStartDate: `${new Date().toISOString().slice(0, 7)}-01`,
+};
+
 interface DbPublisherRow {
   id: string;
   name: string;
   group_name: string;
+  group_id?: string | null;
   privilege: string;
   active: boolean;
   phone: string | null;
@@ -54,19 +75,47 @@ interface DbPortalSettingsRow {
   updated_at?: string;
 }
 
+interface DbServiceGroupRow {
+  id: string;
+  name: string;
+  overseer_name: string;
+  overseer_whatsapp: string;
+  notes: string;
+  sort_order: number;
+}
+
+interface DbServiceOverseerRow {
+  id: string;
+  supervisor_name: string;
+  supervisor_whatsapp: string;
+  cycle_label: string;
+  cycle_start_date: string | null;
+}
+
+interface DbGroupVisitRow {
+  id: string;
+  group_id: string;
+  group_name_snapshot: string;
+  visit_date: string;
+  visitor_name: string;
+  notes: string;
+  status: string;
+}
+
 function mapPublisherFromDb(row: DbPublisherRow): Publisher {
   return {
     id: row.id,
     name: row.name,
     group: row.group_name || 'Congregação',
+    groupId: row.group_id ?? undefined,
     privilege: (row.privilege as PrivilegeType) || 'Publicador',
     active: row.active,
     phone: row.phone ?? undefined,
   };
 }
 
-function mapPublisherToDb(pub: Publisher): DbPublisherRow {
-  return {
+function mapPublisherToDb(pub: Publisher, includeGroupId = true): DbPublisherRow {
+  const row: DbPublisherRow = {
     id: pub.id,
     name: pub.name,
     group_name: pub.group || 'Congregação',
@@ -74,6 +123,10 @@ function mapPublisherToDb(pub: Publisher): DbPublisherRow {
     active: pub.active,
     phone: pub.phone ?? null,
   };
+  if (includeGroupId) {
+    row.group_id = pub.groupId ?? null;
+  }
+  return row;
 }
 
 function mapReportFromDb(row: DbReportRow): ActivityReport {
@@ -111,6 +164,52 @@ function mapReportToDb(report: ActivityReport, includeSnapshot = true): DbReport
   return base;
 }
 
+function mapServiceGroupFromDb(row: DbServiceGroupRow): ServiceGroup {
+  return {
+    id: row.id,
+    name: row.name,
+    overseerName: row.overseer_name || '',
+    overseerWhatsapp: row.overseer_whatsapp || '',
+    notes: row.notes || '',
+    sortOrder: Number.isFinite(row.sort_order) ? row.sort_order : 0,
+  };
+}
+
+function mapServiceGroupToDb(g: ServiceGroup): DbServiceGroupRow {
+  return {
+    id: g.id,
+    name: g.name,
+    overseer_name: g.overseerName || '',
+    overseer_whatsapp: g.overseerWhatsapp || '',
+    notes: g.notes || '',
+    sort_order: g.sortOrder || 0,
+  };
+}
+
+function mapGroupVisitFromDb(row: DbGroupVisitRow): GroupVisit {
+  return {
+    id: row.id,
+    groupId: row.group_id,
+    groupNameSnapshot: row.group_name_snapshot || '',
+    visitDate: row.visit_date,
+    visitorName: row.visitor_name || '',
+    notes: row.notes || '',
+    status: (row.status === 'agendada' ? 'agendada' : 'realizada') as GroupVisitStatus,
+  };
+}
+
+function mapGroupVisitToDb(v: GroupVisit): DbGroupVisitRow {
+  return {
+    id: v.id,
+    group_id: v.groupId,
+    group_name_snapshot: v.groupNameSnapshot || '',
+    visit_date: v.visitDate,
+    visitor_name: v.visitorName || '',
+    notes: v.notes || '',
+    status: v.status,
+  };
+}
+
 export async function dbFetchAll(): Promise<{
   publishers: Publisher[];
   reports: ActivityReport[];
@@ -145,12 +244,10 @@ export async function dbFetchPortalSettings(): Promise<PortalSettings> {
     .maybeSingle();
 
   if (error) {
-    // Fallback seguro caso a tabela portal_settings ainda não tenha sido criada no Supabase
     return DEFAULT_PORTAL_SETTINGS;
   }
 
   if (!data) {
-    // Cria o registro padrão se a tabela existir vazia
     await supabase
       .from('portal_settings')
       .upsert(
@@ -191,8 +288,18 @@ export async function dbUpsertPublishers(items: Publisher[]): Promise<void> {
   if (!supabase || items.length === 0) return;
   const { error } = await supabase
     .from('publishers')
-    .upsert(items.map(mapPublisherToDb), { onConflict: 'id' });
-  if (error) throw error;
+    .upsert(items.map((p) => mapPublisherToDb(p, true)), { onConflict: 'id' });
+  if (error) {
+    const msg = (error.message ?? '').toLowerCase();
+    if (msg.includes('group_id') || error.code === '42703' || error.code === 'PGRST204') {
+      const retry = await supabase
+        .from('publishers')
+        .upsert(items.map((p) => mapPublisherToDb(p, false)), { onConflict: 'id' });
+      if (retry.error) throw retry.error;
+      return;
+    }
+    throw error;
+  }
 }
 
 export async function dbDeletePublisher(id: string): Promise<void> {
@@ -212,9 +319,7 @@ export async function dbUpsertReports(items: ActivityReport[]): Promise<void> {
   const { error } = await supabase
     .from('activity_reports')
     .upsert(items.map((r) => mapReportToDb(r, true)), { onConflict: 'id' });
-
   if (error) {
-    // Fallback compatível caso a coluna privilege_snapshot ainda não exista no banco remoto
     const msg = (error.message ?? '').toLowerCase();
     if (msg.includes('privilege_snapshot') || error.code === '42703' || error.code === 'PGRST204') {
       const retry = await supabase
@@ -230,5 +335,93 @@ export async function dbUpsertReports(items: ActivityReport[]): Promise<void> {
 export async function dbDeleteReport(id: string): Promise<void> {
   if (!supabase) return;
   const { error } = await supabase.from('activity_reports').delete().eq('id', id);
+  if (error) throw error;
+}
+
+export async function dbFetchServiceGroups(): Promise<ServiceGroup[]> {
+  if (!supabase) return DEFAULT_SERVICE_GROUPS;
+  const { data, error } = await supabase
+    .from('service_groups')
+    .select('*')
+    .order('sort_order', { ascending: true })
+    .order('name', { ascending: true });
+  if (error) throw error;
+  return ((data ?? []) as DbServiceGroupRow[]).map(mapServiceGroupFromDb);
+}
+
+export async function dbUpsertServiceGroup(group: ServiceGroup): Promise<void> {
+  if (!supabase) return;
+  const { error } = await supabase
+    .from('service_groups')
+    .upsert(
+      { ...mapServiceGroupToDb(group), updated_at: new Date().toISOString() },
+      { onConflict: 'id' },
+    );
+  if (error) throw error;
+}
+
+export async function dbDeleteServiceGroup(id: string): Promise<void> {
+  if (!supabase) return;
+  const { error } = await supabase.from('service_groups').delete().eq('id', id);
+  if (error) throw error;
+}
+
+export async function dbFetchServiceOverseer(): Promise<ServiceOverseerSettings> {
+  if (!supabase) return DEFAULT_SERVICE_OVERSEER;
+  const { data, error } = await supabase
+    .from('service_overseer_settings')
+    .select('*')
+    .eq('id', 'default')
+    .maybeSingle();
+  if (error) throw error;
+  if (!data) return DEFAULT_SERVICE_OVERSEER;
+  const row = data as DbServiceOverseerRow;
+  return {
+    id: row.id,
+    supervisorName: row.supervisor_name ?? '',
+    supervisorWhatsapp: row.supervisor_whatsapp ?? '',
+    cycleLabel: row.cycle_label || 'Ciclo Atual',
+    cycleStartDate: row.cycle_start_date || DEFAULT_SERVICE_OVERSEER.cycleStartDate,
+  };
+}
+
+export async function dbSaveServiceOverseer(settings: ServiceOverseerSettings): Promise<void> {
+  if (!supabase) return;
+  const { error } = await supabase.from('service_overseer_settings').upsert(
+    {
+      id: settings.id || 'default',
+      supervisor_name: settings.supervisorName || '',
+      supervisor_whatsapp: settings.supervisorWhatsapp || '',
+      cycle_label: settings.cycleLabel || 'Ciclo Atual',
+      cycle_start_date: settings.cycleStartDate || null,
+      updated_at: new Date().toISOString(),
+    },
+    { onConflict: 'id' },
+  );
+  if (error) throw error;
+}
+
+export async function dbFetchGroupVisits(): Promise<GroupVisit[]> {
+  if (!supabase) return [];
+  const { data, error } = await supabase
+    .from('group_visits')
+    .select('*')
+    .order('visit_date', { ascending: false })
+    .order('created_at', { ascending: false });
+  if (error) throw error;
+  return ((data ?? []) as DbGroupVisitRow[]).map(mapGroupVisitFromDb);
+}
+
+export async function dbUpsertGroupVisit(visit: GroupVisit): Promise<void> {
+  if (!supabase) return;
+  const { error } = await supabase
+    .from('group_visits')
+    .upsert(mapGroupVisitToDb(visit), { onConflict: 'id' });
+  if (error) throw error;
+}
+
+export async function dbDeleteGroupVisit(id: string): Promise<void> {
+  if (!supabase) return;
+  const { error } = await supabase.from('group_visits').delete().eq('id', id);
   if (error) throw error;
 }
