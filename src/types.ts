@@ -7,6 +7,10 @@ export type PrivilegeType =
 
 export type AuxiliaryPioneerOption = 'Não' | '15 horas' | '30 horas' | 'Contínuo';
 
+export type PublisherGender = 'Masculino' | 'Feminino';
+export type PublisherHope = 'Outras Ovelhas' | 'Ungido';
+export type SpecialRoleType = 'Nenhum' | 'Pioneiro especial' | 'Missionário em campo';
+
 export interface Publisher {
   id: string;
   name: string;
@@ -15,6 +19,14 @@ export interface Publisher {
   privilege: PrivilegeType;
   active: boolean;
   phone?: string;
+  birthDate?: string;
+  baptismDate?: string;
+  gender?: PublisherGender;
+  hope?: PublisherHope;
+  isRegularPioneer?: boolean;
+  specialRole?: SpecialRoleType;
+  publisherCode?: string;
+  statusFlags?: string;
 }
 
 export interface ActivityReport {
@@ -67,13 +79,23 @@ export interface GroupVisit {
   status: GroupVisitStatus;
 }
 
+export interface MeetingAttendance {
+  id: string; // YYYY-MM
+  monthKey: string; // YYYY-MM
+  midweekWeeks: (number | null)[]; // [sem1, sem2, sem3, sem4, sem5]
+  weekendWeeks: (number | null)[]; // [sem1, sem2, sem3, sem4, sem5]
+  notes: string;
+}
+
 export type TabKey =
   | 'resposta'
   | 'respostas'
   | 'cadastro'
   | 'quem_falta'
   | 'grupos'
-  | 'visitas';
+  | 'visitas'
+  | 'assistencia'
+  | 'cartoes';
 
 export interface ToastMessage {
   id: string;
