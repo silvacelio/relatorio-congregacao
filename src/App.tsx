@@ -1,7 +1,9 @@
 import { Calendar, FileSpreadsheet, FileText, FileUp, Moon, Plus, Printer, Settings, Sun } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { AccessGate } from './components/AccessGate';
+import { AssistenciaTab } from './components/AssistenciaTab';
 import { CadastroTab } from './components/CadastroTab';
+import { CartoesTab } from './components/CartoesTab';
 import { GruposTab } from './components/GruposTab';
 import { ImportModal } from './components/ImportModal';
 import { QuemFaltaTab } from './components/QuemFaltaTab';
@@ -21,17 +23,20 @@ import {
   DEFAULT_SERVICE_OVERSEER,
   dbClearPublishers,
   dbDeleteGroupVisit,
+  dbDeleteMeetingAttendance,
   dbDeletePublisher,
   dbDeleteReport,
   dbDeleteServiceGroup,
   dbFetchAll,
   dbFetchGroupVisits,
+  dbFetchMeetingAttendance,
   dbFetchPortalSettings,
   dbFetchServiceGroups,
   dbFetchServiceOverseer,
   dbSavePortalSettings,
   dbSaveServiceOverseer,
   dbUpsertGroupVisit,
+  dbUpsertMeetingAttendance,
   dbUpsertPublishers,
   dbUpsertReports,
   dbUpsertServiceGroup,
@@ -42,6 +47,7 @@ import {
   ActivityReport,
   AuxiliaryPioneerOption,
   GroupVisit,
+  MeetingAttendance,
   PortalSettings,
   PrivilegeType,
   Publisher,
@@ -69,6 +75,7 @@ const STORAGE_SESSION_UNLOCKED_KEY = 'relatorio_portal_unlocked_v1';
 const STORAGE_GROUPS_KEY = 'relatorio_service_groups_v1';
 const STORAGE_OVERSEER_KEY = 'relatorio_service_overseer_v1';
 const STORAGE_VISITS_KEY = 'relatorio_group_visits_v1';
+const STORAGE_ATTENDANCE_KEY = 'relatorio_meeting_attendance_v1';
 
 function loadStored<T>(key: string, fallback: T): T {
   try {
@@ -111,6 +118,9 @@ export default function App() {
   );
   const [groupVisits, setGroupVisits] = useState<GroupVisit[]>(() =>
     loadStored<GroupVisit[]>(STORAGE_VISITS_KEY, []),
+  );
+  const [attendanceRecords, setAttendanceRecords] = useState<MeetingAttendance[]>(() =>
+    loadStored<MeetingAttendance[]>(STORAGE_ATTENDANCE_KEY, []),
   );
   const [activeMonth, setActiveMonth] = useState<string>(() =>
     loadStored<string>(STORAGE_MONTH_KEY, DEFAULT_MONTH_KEY),
@@ -188,6 +198,15 @@ export default function App() {
   }, [groupVisits]);
 
   useEffect(() => {
+    if (isSupabaseConfigured) return;
+    try {
+      localStorage.setItem(STORAGE_ATTENDANCE_KEY, JSON.stringify(attendanceRecords));
+    } catch {
+      // Ignore storage quota errors
+    }
+  }, [attendanceRecords]);
+
+  useEffect(() => {
     try {
       localStorage.setItem(STORAGE_MONTH_KEY, JSON.stringify(activeMonth));
     } catch {
@@ -251,7 +270,7 @@ export default function App() {
       }
     };
 
-    const loadGroupsAndVisits = async () => {
+    const loadGroupsAndExtras = async () => {
       try {
         const groups = await dbFetchServiceGroups();
         if (!active) return;
@@ -280,10 +299,17 @@ export default function App() {
       } catch {
         // Fallback local
       }
+
+      try {
+        const attendance = await dbFetchMeetingAttendance();
+        if (active) setAttendanceRecords(attendance);
+      } catch {
+        // Fallback local
+      }
     };
 
     loadFromSupabase();
-    loadGroupsAndVisits();
+    loadGroupsAndExtras();
 
     const channel = supabase
       .channel('congregacao-realtime')
@@ -360,6 +386,17 @@ export default function App() {
             .catch(() => {});
         },
       )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'meeting_attendance' },
+        () => {
+          dbFetchMeetingAttendance()
+            .then((attendance) => {
+              if (active) setAttendanceRecords(attendance);
+            })
+            .catch(() => {});
+        },
+      )
       .subscribe();
 
     return () => {
@@ -402,6 +439,15 @@ export default function App() {
     setModalInitialPublisher(publisher ?? null);
     setEditingReport(existing ?? null);
     setReportModalOpen(true);
+  };
+
+  const handleEditMonthReport = (
+    publisher: Publisher,
+    monthKey: string,
+    existing?: ActivityReport | null,
+  ) => {
+    setActiveMonth(monthKey);
+    openNewReportModal(publisher, existing ?? null);
   };
 
   const handleUnlock = () => {
@@ -728,6 +774,74 @@ export default function App() {
     notify('Registro de visita removido.', 'info');
   };
 
+  const handleSaveAttendance = (record: MeetingAttendance) => {
+    setAttendanceRecords((prev) => {
+      const exists = prev.some((r) => r.monthKey === record.monthKey);
+      return exists
+        ? prev.map((r) => (r.monthKey === record.monthKey ? record : r))
+        : [...prev, record];
+    });
+    dbUpsertMeetingAttendance(record).catch((err) =>
+      notify(`Erro ao salvar assistência: ${err.message}`, 'error'),
+    );
+    notify('Assistência salva com sucesso.');
+  };
+
+  const handleBulkImportAttendance = (records: MeetingAttendance[]) => {
+    setAttendanceRecords((prev) => {
+      const map = new Map<string, MeetingAttendance>();
+      prev.forEach((r) => map.set(r.monthKey, r));
+      records.forEach((r) => map.set(r.monthKey, r));
+      return Array.from(map.values());
+    });
+    Promise.all(records.map((r) => dbUpsertMeetingAttendance(r))).catch((err) =>
+      notify(`Erro ao salvar assistência importada: ${err.message}`, 'error'),
+    );
+  };
+
+  const handleDeleteAttendance = (id: string) => {
+    setAttendanceRecords((prev) => prev.filter((r) => r.id !== id && r.monthKey !== id));
+    dbDeleteMeetingAttendance(id).catch((err) =>
+      notify(`Erro ao remover assistência: ${err.message}`, 'error'),
+    );
+    notify('Registro de assistência removido.', 'info');
+  };
+
+  const handleBulkImportCartoes = (
+    importedPublishers: Publisher[],
+    importedReports: ActivityReport[],
+  ) => {
+    if (importedPublishers.length > 0) {
+      setPublishers((prev) => {
+        const map = new Map<string, Publisher>();
+        prev.forEach((p) => map.set(normalizeText(p.name), p));
+        importedPublishers.forEach((p) => map.set(normalizeText(p.name), p));
+        return Array.from(map.values());
+      });
+      dbUpsertPublishers(importedPublishers).catch((err) =>
+        notify(`Erro ao salvar publicadores: ${err.message}`, 'error'),
+      );
+    }
+
+    if (importedReports.length > 0) {
+      setReports((prev) => {
+        const next = [...prev];
+        importedReports.forEach((rep) => {
+          const normName = normalizeText(rep.publisherName);
+          const idx = next.findIndex(
+            (r) => r.monthKey === rep.monthKey && normalizeText(r.publisherName) === normName,
+          );
+          if (idx >= 0) next[idx] = rep;
+          else next.unshift(rep);
+        });
+        return next;
+      });
+      dbUpsertReports(importedReports).catch((err) =>
+        notify(`Erro ao salvar relatórios: ${err.message}`, 'error'),
+      );
+    }
+  };
+
   const resolveImportedGroup = (rawGroup?: string): { group: string; groupId?: string } => {
     const trimmed = (rawGroup || '').trim();
     if (!trimmed) return { group: 'Sem Grupo' };
@@ -870,6 +984,8 @@ export default function App() {
     { key: 'quem_falta', label: 'Quem Falta' },
     { key: 'grupos', label: 'Por Grupo' },
     { key: 'visitas', label: 'Visitas' },
+    { key: 'assistencia', label: 'Assistência' },
+    { key: 'cartoes', label: 'Cartões S-21' },
   ];
 
   const activePublishersCount = publishers.filter((p) => p.active).length;
@@ -894,7 +1010,7 @@ export default function App() {
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-100 flex flex-col transition-colors">
       <header className="no-print bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 sticky top-0 z-30">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-8">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-4">
           <a
             href="#top"
             onClick={(e) => {
@@ -908,7 +1024,7 @@ export default function App() {
 
           <nav
             aria-label="Abas da planilha"
-            className="hidden md:flex items-center gap-6 text-sm font-medium"
+            className="hidden md:flex items-center gap-4 lg:gap-5 text-sm font-medium overflow-x-auto"
           >
             {navItems.map((item) => {
               const isActive = activeTab === item.key;
@@ -1135,6 +1251,28 @@ export default function App() {
                   onSaveOverseerSettings={handleSaveOverseerSettings}
                   onSaveVisit={handleSaveGroupVisit}
                   onDeleteVisit={handleDeleteGroupVisit}
+                  onNotify={notify}
+                />
+              )}
+              {activeTab === 'assistencia' && (
+                <AssistenciaTab
+                  activeMonth={activeMonth}
+                  attendanceRecords={attendanceRecords}
+                  onSaveAttendance={handleSaveAttendance}
+                  onBulkImportAttendance={handleBulkImportAttendance}
+                  onDeleteAttendance={handleDeleteAttendance}
+                  onNotify={notify}
+                />
+              )}
+              {activeTab === 'cartoes' && (
+                <CartoesTab
+                  activeMonth={activeMonth}
+                  publishers={publishers}
+                  reports={reports}
+                  serviceGroups={serviceGroups}
+                  onUpdatePublisher={handleUpdatePublisher}
+                  onBulkImportCartoes={handleBulkImportCartoes}
+                  onEditMonthReport={handleEditMonthReport}
                   onNotify={notify}
                 />
               )}
