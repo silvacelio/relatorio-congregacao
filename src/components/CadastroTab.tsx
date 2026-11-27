@@ -38,6 +38,13 @@ export function CadastroTab({
   const [newName, setNewName] = useState('');
   const [newGroupId, setNewGroupId] = useState('');
   const [newPrivilege, setNewPrivilege] = useState<PrivilegeType>('Publicador');
+  const [duplicateMatch, setDuplicateMatch] = useState<{
+    existing: Publisher;
+    nextGroup: string;
+    nextGroupId?: string;
+    nextPrivilege: PrivilegeType;
+  } | null>(null);
+
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState('');
   const [editGroupId, setEditGroupId] = useState('');
@@ -86,18 +93,45 @@ export function CadastroTab({
     e.preventDefault();
     const cleaned = cleanDisplayName(newName);
     if (!cleaned) return;
-    const alreadyExists = publishers.some((p) => normalizeText(p.name) === normalizeText(cleaned));
-    if (alreadyExists) return;
 
     const chosenGroup = newGroupId ? groupById.get(newGroupId) : undefined;
+    const nextGroup = chosenGroup ? chosenGroup.name : 'Sem Grupo';
+    const nextGroupId = chosenGroup ? chosenGroup.id : undefined;
 
+    const existing = publishers.find(
+      (p) => normalizeText(p.name) === normalizeText(cleaned),
+    );
+    if (existing) {
+      setDuplicateMatch({
+        existing,
+        nextGroup,
+        nextGroupId,
+        nextPrivilege: newPrivilege,
+      });
+      return;
+    }
+
+    setDuplicateMatch(null);
     onAddPublisher({
       name: cleaned,
-      group: chosenGroup ? chosenGroup.name : 'Sem Grupo',
-      groupId: chosenGroup ? chosenGroup.id : undefined,
+      group: nextGroup,
+      groupId: nextGroupId,
       privilege: newPrivilege,
       active: true,
     });
+    setNewName('');
+  };
+
+  const handleConfirmUpdateDuplicate = () => {
+    if (!duplicateMatch) return;
+    onUpdatePublisher({
+      ...duplicateMatch.existing,
+      group: duplicateMatch.nextGroup,
+      groupId: duplicateMatch.nextGroupId,
+      privilege: duplicateMatch.nextPrivilege,
+      active: true,
+    });
+    setDuplicateMatch(null);
     setNewName('');
   };
 
@@ -196,7 +230,10 @@ export function CadastroTab({
             <input
               type="text"
               value={newName}
-              onChange={(e) => setNewName(e.target.value)}
+              onChange={(e) => {
+                setNewName(e.target.value);
+                if (duplicateMatch) setDuplicateMatch(null);
+              }}
               placeholder="Ex.: MARIA JOSÉ DA SILVA"
               required
               className="w-full h-9 px-3 text-sm bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-md text-slate-900 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-600"
@@ -245,6 +282,44 @@ export function CadastroTab({
             </button>
           </div>
         </form>
+
+        {duplicateMatch && (
+          <div className="mt-3 p-3.5 bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800 rounded-md flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+            <div className="text-xs text-amber-950 dark:text-amber-200">
+              <strong>{duplicateMatch.existing.name}</strong> já está na lista de cadastro (Grupo atual:{' '}
+              <strong>{resolveGroupName(duplicateMatch.existing)}</strong> · Privilégio atual:{' '}
+              <strong>{duplicateMatch.existing.privilege}</strong>). Deseja atualizar para{' '}
+              <strong>{duplicateMatch.nextGroup}</strong> / <strong>{duplicateMatch.nextPrivilege}</strong>?
+            </div>
+            <div className="flex flex-wrap items-center gap-2 shrink-0">
+              <button
+                type="button"
+                onClick={handleConfirmUpdateDuplicate}
+                className="h-8 px-3 text-xs font-medium text-white bg-emerald-600 hover:bg-emerald-700 rounded cursor-pointer"
+              >
+                Atualizar Cadastro Existente
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setSearch(duplicateMatch.existing.name);
+                  startEdit(duplicateMatch.existing);
+                  setDuplicateMatch(null);
+                }}
+                className="h-8 px-3 text-xs font-medium text-amber-900 dark:text-amber-200 bg-white dark:bg-slate-800 border border-amber-300 dark:border-amber-700 rounded hover:bg-amber-100/70 cursor-pointer"
+              >
+                Localizar na Lista
+              </button>
+              <button
+                type="button"
+                onClick={() => setDuplicateMatch(null)}
+                className="h-8 px-2.5 text-xs text-slate-600 dark:text-slate-300 hover:bg-amber-100/60 dark:hover:bg-slate-800 rounded cursor-pointer"
+              >
+                Fechar
+              </button>
+            </div>
+          </div>
+        )}
       </section>
 
       <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg overflow-hidden">
