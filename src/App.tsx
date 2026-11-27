@@ -10,6 +10,7 @@ import { QuemFaltaTab } from './components/QuemFaltaTab';
 import { ReportModal } from './components/ReportModal';
 import { RespostaTab } from './components/RespostaTab';
 import { RespostasFormTab } from './components/RespostasFormTab';
+import { EnviarRelatorioPayload, EnviarRelatorioTab } from './components/SendReportTab';
 import { SettingsModal } from './components/SettingsModal';
 import { VisitasTab } from './components/VisitasTab';
 import {
@@ -125,7 +126,21 @@ export default function App() {
   const [activeMonth, setActiveMonth] = useState<string>(() =>
     loadStored<string>(STORAGE_MONTH_KEY, DEFAULT_MONTH_KEY),
   );
-  const [activeTab, setActiveTab] = useState<TabKey>('resposta');
+  const [activeTab, setActiveTab] = useState<TabKey>(() => {
+    if (typeof window !== 'undefined') {
+      const path = window.location.pathname.toLowerCase();
+      const searchAba = new URLSearchParams(window.location.search).get('aba');
+      const hash = window.location.hash.toLowerCase();
+      if (
+        path.includes('enviar-relatorio') ||
+        searchAba === 'enviar-relatorio' ||
+        hash.includes('enviar-relatorio')
+      ) {
+        return 'enviar_relatorio';
+      }
+    }
+    return 'resposta';
+  });
   const [isDark, setIsDark] = useState<boolean>(() => {
     try {
       return localStorage.getItem(STORAGE_THEME_KEY) === 'dark';
@@ -248,6 +263,7 @@ export default function App() {
       try {
         const data = await dbFetchAll();
         if (!active) return;
+
         const alreadySeeded = localStorage.getItem('relatorio_supabase_seeded_v1') === '1';
         if (data.publishers.length === 0 && data.reports.length === 0 && !alreadySeeded) {
           await dbUpsertPublishers(INITIAL_PUBLISHERS);
@@ -593,6 +609,59 @@ export default function App() {
     setModalInitialPublisher(null);
   };
 
+  const handleSubmitSelfReport = (payload: EnviarRelatorioPayload) => {
+    const normPubName = normalizeText(payload.publisher.name);
+    const existingSameMonth = reports.find(
+      (r) =>
+        r.monthKey === activeMonth &&
+        (r.publisherId === payload.publisher.id ||
+          normalizeText(r.publisherName) === normPubName),
+    );
+
+    if (existingSameMonth) {
+      const updatedReport: ActivityReport = {
+        ...existingSameMonth,
+        timestamp: new Date().toISOString(),
+        publisherId: payload.publisher.id,
+        privilegeSnapshot: payload.publisher.privilege,
+        participated: payload.participated,
+        hours: payload.hours,
+        bibleStudies: payload.bibleStudies,
+        auxiliaryPioneer: payload.auxiliaryPioneer,
+        notes: payload.notes,
+      };
+      setReports((prev) =>
+        prev.map((r) => (r.id === existingSameMonth.id ? updatedReport : r)),
+      );
+      dbUpsertReports([updatedReport]).catch((err) =>
+        notify(`Erro ao atualizar relatório: ${err.message}`, 'error'),
+      );
+      notify(
+        `Relatório de ${payload.publisher.name} atualizado para ${formatMonthLabel(activeMonth)}.`,
+      );
+      return;
+    }
+
+    const newReport: ActivityReport = {
+      id: generateId(),
+      monthKey: activeMonth,
+      timestamp: new Date().toISOString(),
+      publisherName: cleanDisplayName(payload.publisher.name),
+      publisherId: payload.publisher.id,
+      privilegeSnapshot: payload.publisher.privilege,
+      participated: payload.participated,
+      hours: payload.hours,
+      bibleStudies: payload.bibleStudies,
+      auxiliaryPioneer: payload.auxiliaryPioneer,
+      notes: payload.notes,
+    };
+    setReports((prev) => [newReport, ...prev]);
+    dbUpsertReports([newReport]).catch((err) =>
+      notify(`Erro ao salvar relatório: ${err.message}`, 'error'),
+    );
+    notify(`Relatório de ${payload.publisher.name} enviado com sucesso!`);
+  };
+
   const handleDeleteReport = (id: string) => {
     setReports((prev) => prev.filter((r) => r.id !== id));
     dbDeleteReport(id).catch((err) =>
@@ -822,7 +891,6 @@ export default function App() {
         notify(`Erro ao salvar publicadores: ${err.message}`, 'error'),
       );
     }
-
     if (importedReports.length > 0) {
       setReports((prev) => {
         const next = [...prev];
@@ -859,6 +927,7 @@ export default function App() {
       mode === 'append' ? publishers.map((p) => normalizeText(p.name)) : [],
     );
     const newEntries: Publisher[] = [];
+
     rows.forEach((row) => {
       const cleaned = cleanDisplayName(row.name);
       const norm = normalizeText(cleaned);
@@ -891,6 +960,7 @@ export default function App() {
       );
       notify(`${newEntries.length} novos publicadores importados.`);
     }
+
     setImportModalOpen(false);
     setActiveTab('cadastro');
   };
@@ -898,6 +968,7 @@ export default function App() {
   const handleImportToReports = (rows: ParsedRow[], autoAddMissingToCadastro: boolean) => {
     const currentNormSet = new Set(publishers.map((p) => normalizeText(p.name)));
     const addedPublishers: Publisher[] = [];
+
     if (autoAddMissingToCadastro) {
       rows.forEach((row) => {
         const cleaned = cleanDisplayName(row.name);
@@ -986,6 +1057,7 @@ export default function App() {
     { key: 'visitas', label: 'Visitas' },
     { key: 'assistencia', label: 'Assistência' },
     { key: 'cartoes', label: 'Cartões S-21' },
+    { key: 'enviar_relatorio', label: '📱 Enviar Relatório' },
   ];
 
   const activePublishersCount = publishers.filter((p) => p.active).length;
@@ -1024,7 +1096,7 @@ export default function App() {
 
           <nav
             aria-label="Abas da planilha"
-            className="hidden md:flex items-center gap-4 lg:gap-5 text-sm font-medium overflow-x-auto"
+            className="hidden md:flex items-center gap-3.5 lg:gap-4 text-xs lg:text-sm font-medium overflow-x-auto"
           >
             {navItems.map((item) => {
               const isActive = activeTab === item.key;
@@ -1274,6 +1346,14 @@ export default function App() {
                   onBulkImportCartoes={handleBulkImportCartoes}
                   onEditMonthReport={handleEditMonthReport}
                   onNotify={notify}
+                />
+              )}
+              {activeTab === 'enviar_relatorio' && (
+                <EnviarRelatorioTab
+                  monthKey={activeMonth}
+                  publishers={publishers}
+                  reports={reports}
+                  onSubmitReport={handleSubmitSelfReport}
                 />
               )}
             </>
