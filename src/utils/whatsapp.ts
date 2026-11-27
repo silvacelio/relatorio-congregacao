@@ -1,6 +1,6 @@
 /**
  * Utilitário centralizado para normalização de telefones brasileiros/internacionais
- * e geração de links WhatsApp (wa.me) para lembretes e integrações futuras.
+ * e geração de links WhatsApp (wa.me) para lembretes e envio de relatórios.
  */
 
 export const CONGREGATION_REMINDER_MESSAGE = [
@@ -26,12 +26,10 @@ export function normalizePhoneDigits(rawPhone?: string | null): string {
   let digits = rawPhone.replace(/\D/g, '');
   if (!digits) return '';
 
-  // Remove prefixo internacional 00 se informado
   if (digits.startsWith('00')) {
     digits = digits.slice(2);
   }
 
-  // Números brasileiros locais (DDD + 8 ou 9 dígitos = 10 ou 11 dígitos)
   if (digits.length === 10 || digits.length === 11) {
     digits = `55${digits}`;
   }
@@ -41,7 +39,6 @@ export function normalizePhoneDigits(rawPhone?: string | null): string {
 
 /**
  * Valida se o telefone possui dígitos suficientes para abrir conversa no WhatsApp.
- * Após normalização: Brasil tem 12 ou 13 dígitos (55 + DDD + número).
  */
 export function isValidWhatsAppPhone(rawPhone?: string | null): boolean {
   const digits = normalizePhoneDigits(rawPhone);
@@ -70,8 +67,29 @@ export function buildReminderWhatsAppUrl(
 }
 
 /**
- * Estrutura preparada para integração futura do botão "🔗 Enviar Relatório"
- * (envio do link para o próprio publicador informar seu relatório pelo celular).
+ * Monta o link direto da página pública de envio de relatório.
+ */
+export function buildPublisherSelfReportUrl(
+  publisherId?: string,
+  monthKey?: string,
+): string {
+  const origin =
+    typeof window !== 'undefined' && window.location?.origin
+      ? window.location.origin
+      : 'https://relatorio-congregacao-5mld.vercel.app';
+
+  const params = new URLSearchParams();
+  if (publisherId) params.set('publicador', publisherId);
+  if (monthKey) params.set('mes', monthKey);
+  params.set('modo', 'publico');
+
+  const qs = params.toString();
+  return `${origin}/enviar-relatorio${qs ? `?${qs}` : ''}`;
+}
+
+/**
+ * Monta o link do WhatsApp já com a mensagem e o link personalizado
+ * para o próprio publicador preencher seu relatório pelo celular.
  */
 export function buildSelfReportWhatsAppUrl(
   phone: string,
@@ -83,6 +101,8 @@ export function buildSelfReportWhatsAppUrl(
     '',
     'Segue o link para enviar seu relatório ministerial deste mês pelo celular:',
     reportUrl,
+    '',
+    'Basta abrir, preencher e tocar em "Enviar Relatório".',
     '',
     'Muito obrigado.',
     '',
