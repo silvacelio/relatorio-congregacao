@@ -95,7 +95,8 @@ export type TabKey =
   | 'grupos'
   | 'visitas'
   | 'assistencia'
-  | 'cartoes';
+  | 'cartoes'
+  | 'enviar_relatorio';
 
 export interface ToastMessage {
   id: string;
