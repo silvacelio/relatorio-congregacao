@@ -4,11 +4,15 @@ import {
   AuxiliaryPioneerOption,
   GroupVisit,
   GroupVisitStatus,
+  MeetingAttendance,
   PortalSettings,
   PrivilegeType,
   Publisher,
+  PublisherGender,
+  PublisherHope,
   ServiceGroup,
   ServiceOverseerSettings,
+  SpecialRoleType,
 } from '../types';
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string | undefined;
@@ -52,6 +56,14 @@ interface DbPublisherRow {
   privilege: string;
   active: boolean;
   phone: string | null;
+  birth_date?: string | null;
+  baptism_date?: string | null;
+  gender?: string | null;
+  hope?: string | null;
+  is_regular_pioneer?: boolean | null;
+  special_role?: string | null;
+  publisher_code?: string | null;
+  status_flags?: string | null;
 }
 
 interface DbReportRow {
@@ -102,7 +114,38 @@ interface DbGroupVisitRow {
   status: string;
 }
 
+interface DbMeetingAttendanceRow {
+  id: string;
+  month_key: string;
+  midweek_weeks: unknown;
+  weekend_weeks: unknown;
+  notes: string;
+}
+
+function normalizeWeeks(raw: unknown): (number | null)[] {
+  const arr = Array.isArray(raw) ? raw : [];
+  return [0, 1, 2, 3, 4].map((idx) => {
+    const val = arr[idx];
+    if (val === null || val === undefined || val === '') return null;
+    const num = Number(val);
+    return Number.isFinite(num) && num >= 0 ? Math.round(num) : null;
+  });
+}
+
 function mapPublisherFromDb(row: DbPublisherRow): Publisher {
+  const gender =
+    row.gender === 'Masculino' || row.gender === 'Feminino'
+      ? (row.gender as PublisherGender)
+      : undefined;
+  const hope =
+    row.hope === 'Outras Ovelhas' || row.hope === 'Ungido'
+      ? (row.hope as PublisherHope)
+      : undefined;
+  const specialRole =
+    row.special_role === 'Pioneiro especial' || row.special_role === 'Missionário em campo'
+      ? (row.special_role as SpecialRoleType)
+      : undefined;
+
   return {
     id: row.id,
     name: row.name,
@@ -111,10 +154,18 @@ function mapPublisherFromDb(row: DbPublisherRow): Publisher {
     privilege: (row.privilege as PrivilegeType) || 'Publicador',
     active: row.active,
     phone: row.phone ?? undefined,
+    birthDate: row.birth_date ?? undefined,
+    baptismDate: row.baptism_date ?? undefined,
+    gender,
+    hope,
+    isRegularPioneer: Boolean(row.is_regular_pioneer),
+    specialRole,
+    publisherCode: row.publisher_code ?? undefined,
+    statusFlags: row.status_flags ?? undefined,
   };
 }
 
-function mapPublisherToDb(pub: Publisher, includeGroupId = true): DbPublisherRow {
+function mapPublisherToDb(pub: Publisher, includeExtended = true): DbPublisherRow {
   const row: DbPublisherRow = {
     id: pub.id,
     name: pub.name,
@@ -123,8 +174,16 @@ function mapPublisherToDb(pub: Publisher, includeGroupId = true): DbPublisherRow
     active: pub.active,
     phone: pub.phone ?? null,
   };
-  if (includeGroupId) {
+  if (includeExtended) {
     row.group_id = pub.groupId ?? null;
+    row.birth_date = pub.birthDate ?? null;
+    row.baptism_date = pub.baptismDate ?? null;
+    row.gender = pub.gender ?? null;
+    row.hope = pub.hope ?? null;
+    row.is_regular_pioneer = Boolean(pub.isRegularPioneer || pub.privilege === 'Pioneiro Regular');
+    row.special_role = pub.specialRole ?? 'Nenhum';
+    row.publisher_code = pub.publisherCode ?? null;
+    row.status_flags = pub.statusFlags ?? null;
   }
   return row;
 }
@@ -210,6 +269,26 @@ function mapGroupVisitToDb(v: GroupVisit): DbGroupVisitRow {
   };
 }
 
+function mapAttendanceFromDb(row: DbMeetingAttendanceRow): MeetingAttendance {
+  return {
+    id: row.id,
+    monthKey: row.month_key || row.id,
+    midweekWeeks: normalizeWeeks(row.midweek_weeks),
+    weekendWeeks: normalizeWeeks(row.weekend_weeks),
+    notes: row.notes || '',
+  };
+}
+
+function mapAttendanceToDb(a: MeetingAttendance): DbMeetingAttendanceRow {
+  return {
+    id: a.id || a.monthKey,
+    month_key: a.monthKey,
+    midweek_weeks: normalizeWeeks(a.midweekWeeks),
+    weekend_weeks: normalizeWeeks(a.weekendWeeks),
+    notes: a.notes || '',
+  };
+}
+
 export async function dbFetchAll(): Promise<{
   publishers: Publisher[];
   reports: ActivityReport[];
@@ -291,7 +370,12 @@ export async function dbUpsertPublishers(items: Publisher[]): Promise<void> {
     .upsert(items.map((p) => mapPublisherToDb(p, true)), { onConflict: 'id' });
   if (error) {
     const msg = (error.message ?? '').toLowerCase();
-    if (msg.includes('group_id') || error.code === '42703' || error.code === 'PGRST204') {
+    if (
+      msg.includes('group_id') ||
+      msg.includes('birth_date') ||
+      error.code === '42703' ||
+      error.code === 'PGRST204'
+    ) {
       const retry = await supabase
         .from('publishers')
         .upsert(items.map((p) => mapPublisherToDb(p, false)), { onConflict: 'id' });
@@ -423,5 +507,32 @@ export async function dbUpsertGroupVisit(visit: GroupVisit): Promise<void> {
 export async function dbDeleteGroupVisit(id: string): Promise<void> {
   if (!supabase) return;
   const { error } = await supabase.from('group_visits').delete().eq('id', id);
+  if (error) throw error;
+}
+
+export async function dbFetchMeetingAttendance(): Promise<MeetingAttendance[]> {
+  if (!supabase) return [];
+  const { data, error } = await supabase
+    .from('meeting_attendance')
+    .select('*')
+    .order('month_key', { ascending: true });
+  if (error) throw error;
+  return ((data ?? []) as DbMeetingAttendanceRow[]).map(mapAttendanceFromDb);
+}
+
+export async function dbUpsertMeetingAttendance(item: MeetingAttendance): Promise<void> {
+  if (!supabase) return;
+  const { error } = await supabase
+    .from('meeting_attendance')
+    .upsert(
+      { ...mapAttendanceToDb(item), updated_at: new Date().toISOString() },
+      { onConflict: 'id' },
+    );
+  if (error) throw error;
+}
+
+export async function dbDeleteMeetingAttendance(id: string): Promise<void> {
+  if (!supabase) return;
+  const { error } = await supabase.from('meeting_attendance').delete().eq('id', id);
   if (error) throw error;
 }
