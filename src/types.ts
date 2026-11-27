@@ -43,6 +43,23 @@ export interface ActivityReport {
   notes: string;
 }
 
+export type PendingSelfReportStatus = 'pendente' | 'confirmado' | 'recusado';
+
+export interface PendingSelfReport {
+  id: string;
+  monthKey: string; // YYYY-MM
+  submittedAt: string;
+  publisherId?: string;
+  publisherName: string;
+  privilegeSnapshot: PrivilegeType;
+  participated: boolean;
+  hours: number | null;
+  bibleStudies: number | null;
+  auxiliaryPioneer: AuxiliaryPioneerOption;
+  notes: string;
+  status: PendingSelfReportStatus;
+}
+
 export interface PortalSettings {
   id: string;
   accessCode: string;
