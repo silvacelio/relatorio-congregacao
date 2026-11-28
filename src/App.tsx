@@ -25,12 +25,14 @@ import {
   dbClearPublishers,
   dbDeleteGroupVisit,
   dbDeleteMeetingAttendance,
+  dbDeletePendingSelfReport,
   dbDeletePublisher,
   dbDeleteReport,
   dbDeleteServiceGroup,
   dbFetchAll,
   dbFetchGroupVisits,
   dbFetchMeetingAttendance,
+  dbFetchPendingSelfReports,
   dbFetchPortalSettings,
   dbFetchServiceGroups,
   dbFetchServiceOverseer,
@@ -38,6 +40,7 @@ import {
   dbSaveServiceOverseer,
   dbUpsertGroupVisit,
   dbUpsertMeetingAttendance,
+  dbUpsertPendingSelfReport,
   dbUpsertPublishers,
   dbUpsertReports,
   dbUpsertServiceGroup,
@@ -49,6 +52,7 @@ import {
   AuxiliaryPioneerOption,
   GroupVisit,
   MeetingAttendance,
+  PendingSelfReport,
   PortalSettings,
   PrivilegeType,
   Publisher,
@@ -69,6 +73,7 @@ import { ParsedRow } from './utils/importParsers';
 
 const STORAGE_PUBLISHERS_KEY = 'relatorio_congregacao_publishers_v1';
 const STORAGE_REPORTS_KEY = 'relatorio_congregacao_reports_v1';
+const STORAGE_PENDING_SELF_REPORTS_KEY = 'relatorio_pending_self_reports_v1';
 const STORAGE_MONTH_KEY = 'relatorio_congregacao_month_v1';
 const STORAGE_THEME_KEY = 'relatorio_congregacao_theme_v1';
 const STORAGE_PORTAL_SETTINGS_KEY = 'relatorio_portal_settings_v1';
@@ -107,9 +112,26 @@ function loadStoredPublishers(): Publisher[] {
 }
 
 export default function App() {
+  const isPublicSelfReportMode = useMemo(() => {
+    if (typeof window === 'undefined') return false;
+    const path = window.location.pathname.toLowerCase();
+    const params = new URLSearchParams(window.location.search);
+    const modo = (params.get('modo') || '').toLowerCase();
+    const hash = window.location.hash.toLowerCase();
+    return (
+      path.includes('enviar-relatorio') ||
+      modo === 'publico' ||
+      params.has('publicador') ||
+      hash.includes('enviar-relatorio')
+    );
+  }, []);
+
   const [publishers, setPublishers] = useState<Publisher[]>(loadStoredPublishers);
   const [reports, setReports] = useState<ActivityReport[]>(() =>
     loadStored<ActivityReport[]>(STORAGE_REPORTS_KEY, INITIAL_REPORTS),
+  );
+  const [pendingSelfReports, setPendingSelfReports] = useState<PendingSelfReport[]>(() =>
+    loadStored<PendingSelfReport[]>(STORAGE_PENDING_SELF_REPORTS_KEY, []),
   );
   const [serviceGroups, setServiceGroups] = useState<ServiceGroup[]>(() =>
     loadStored<ServiceGroup[]>(STORAGE_GROUPS_KEY, DEFAULT_SERVICE_GROUPS),
@@ -123,24 +145,18 @@ export default function App() {
   const [attendanceRecords, setAttendanceRecords] = useState<MeetingAttendance[]>(() =>
     loadStored<MeetingAttendance[]>(STORAGE_ATTENDANCE_KEY, []),
   );
-  const [activeMonth, setActiveMonth] = useState<string>(() =>
-    loadStored<string>(STORAGE_MONTH_KEY, DEFAULT_MONTH_KEY),
-  );
-  const [activeTab, setActiveTab] = useState<TabKey>(() => {
+  const [activeMonth, setActiveMonth] = useState<string>(() => {
     if (typeof window !== 'undefined') {
-      const path = window.location.pathname.toLowerCase();
-      const searchAba = new URLSearchParams(window.location.search).get('aba');
-      const hash = window.location.hash.toLowerCase();
-      if (
-        path.includes('enviar-relatorio') ||
-        searchAba === 'enviar-relatorio' ||
-        hash.includes('enviar-relatorio')
-      ) {
-        return 'enviar_relatorio';
+      const mesParam = new URLSearchParams(window.location.search).get('mes');
+      if (mesParam && /^\d{4}-\d{2}$/.test(mesParam)) {
+        return mesParam;
       }
     }
-    return 'resposta';
+    return loadStored<string>(STORAGE_MONTH_KEY, DEFAULT_MONTH_KEY);
   });
+  const [activeTab, setActiveTab] = useState<TabKey>(() =>
+    isPublicSelfReportMode ? 'enviar_relatorio' : 'resposta',
+  );
   const [isDark, setIsDark] = useState<boolean>(() => {
     try {
       return localStorage.getItem(STORAGE_THEME_KEY) === 'dark';
@@ -188,6 +204,18 @@ export default function App() {
   useEffect(() => {
     if (isSupabaseConfigured) return;
     try {
+      localStorage.setItem(
+        STORAGE_PENDING_SELF_REPORTS_KEY,
+        JSON.stringify(pendingSelfReports),
+      );
+    } catch {
+      // Ignore storage quota errors
+    }
+  }, [pendingSelfReports]);
+
+  useEffect(() => {
+    if (isSupabaseConfigured) return;
+    try {
       localStorage.setItem(STORAGE_GROUPS_KEY, JSON.stringify(serviceGroups));
     } catch {
       // Ignore storage quota errors
@@ -222,12 +250,13 @@ export default function App() {
   }, [attendanceRecords]);
 
   useEffect(() => {
+    if (isPublicSelfReportMode) return;
     try {
       localStorage.setItem(STORAGE_MONTH_KEY, JSON.stringify(activeMonth));
     } catch {
       // Ignore storage quota errors
     }
-  }, [activeMonth]);
+  }, [activeMonth, isPublicSelfReportMode]);
 
   useEffect(() => {
     document.documentElement.classList.toggle('dark', isDark);
@@ -288,6 +317,15 @@ export default function App() {
 
     const loadGroupsAndExtras = async () => {
       try {
+        const pending = await dbFetchPendingSelfReports();
+        if (active) setPendingSelfReports(pending);
+      } catch {
+        // Fallback local se tabela ainda não existir
+      }
+
+      if (isPublicSelfReportMode) return;
+
+      try {
         const groups = await dbFetchServiceGroups();
         if (!active) return;
         const groupsSeeded = localStorage.getItem('relatorio_groups_seeded_v1') === '1';
@@ -347,6 +385,17 @@ export default function App() {
           dbFetchAll()
             .then((d) => {
               if (active) setReports(d.reports);
+            })
+            .catch(() => {});
+        },
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'pending_self_reports' },
+        () => {
+          dbFetchPendingSelfReports()
+            .then((pending) => {
+              if (active) setPendingSelfReports(pending);
             })
             .catch(() => {});
         },
@@ -419,7 +468,7 @@ export default function App() {
       active = false;
       supabase?.removeChannel(channel);
     };
-  }, []);
+  }, [isPublicSelfReportMode]);
 
   const notify = (text: string, tone: 'success' | 'error' | 'info' = 'success') => {
     const id = generateId();
@@ -611,9 +660,10 @@ export default function App() {
 
   const handleSubmitSelfReport = (payload: EnviarRelatorioPayload) => {
     const normPubName = normalizeText(payload.publisher.name);
+    const targetMonth = payload.monthKey || activeMonth;
     const existingSameMonth = reports.find(
       (r) =>
-        r.monthKey === activeMonth &&
+        r.monthKey === targetMonth &&
         (r.publisherId === payload.publisher.id ||
           normalizeText(r.publisherName) === normPubName),
     );
@@ -637,14 +687,14 @@ export default function App() {
         notify(`Erro ao atualizar relatório: ${err.message}`, 'error'),
       );
       notify(
-        `Relatório de ${payload.publisher.name} atualizado para ${formatMonthLabel(activeMonth)}.`,
+        `Relatório de ${payload.publisher.name} atualizado para ${formatMonthLabel(targetMonth)}.`,
       );
       return;
     }
 
     const newReport: ActivityReport = {
       id: generateId(),
-      monthKey: activeMonth,
+      monthKey: targetMonth,
       timestamp: new Date().toISOString(),
       publisherName: cleanDisplayName(payload.publisher.name),
       publisherId: payload.publisher.id,
@@ -660,6 +710,109 @@ export default function App() {
       notify(`Erro ao salvar relatório: ${err.message}`, 'error'),
     );
     notify(`Relatório de ${payload.publisher.name} enviado com sucesso!`);
+  };
+
+  const handleSubmitPublicReport = async (
+    payload: EnviarRelatorioPayload,
+  ): Promise<boolean> => {
+    const normPubName = normalizeText(payload.publisher.name);
+    const targetMonth = payload.monthKey || activeMonth;
+    const existingPending = pendingSelfReports.find(
+      (p) =>
+        p.status === 'pendente' &&
+        p.monthKey === targetMonth &&
+        (p.publisherId === payload.publisher.id ||
+          normalizeText(p.publisherName) === normPubName),
+    );
+
+    const entry: PendingSelfReport = {
+      id: existingPending?.id ?? generateId(),
+      monthKey: targetMonth,
+      submittedAt: new Date().toISOString(),
+      publisherId: payload.publisher.id,
+      publisherName: cleanDisplayName(payload.publisher.name),
+      privilegeSnapshot: payload.publisher.privilege,
+      participated: payload.participated,
+      hours: payload.hours,
+      bibleStudies: payload.bibleStudies,
+      auxiliaryPioneer: payload.auxiliaryPioneer,
+      notes: payload.notes,
+      status: 'pendente',
+    };
+
+    try {
+      if (isSupabaseConfigured) {
+        await dbUpsertPendingSelfReport(entry);
+      }
+      setPendingSelfReports((prev) => {
+        const exists = prev.some((p) => p.id === entry.id);
+        return exists ? prev.map((p) => (p.id === entry.id ? entry : p)) : [entry, ...prev];
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  const handleConfirmPendingReport = (item: PendingSelfReport) => {
+    const normPubName = normalizeText(item.publisherName);
+    const existingSameMonth = reports.find(
+      (r) =>
+        r.monthKey === item.monthKey &&
+        ((item.publisherId && r.publisherId === item.publisherId) ||
+          normalizeText(r.publisherName) === normPubName),
+    );
+
+    const officialReport: ActivityReport = existingSameMonth
+      ? {
+          ...existingSameMonth,
+          timestamp: new Date().toISOString(),
+          publisherId: item.publisherId ?? existingSameMonth.publisherId,
+          privilegeSnapshot: item.privilegeSnapshot,
+          participated: item.participated,
+          hours: item.hours,
+          bibleStudies: item.bibleStudies,
+          auxiliaryPioneer: item.auxiliaryPioneer,
+          notes: item.notes,
+        }
+      : {
+          id: generateId(),
+          monthKey: item.monthKey,
+          timestamp: new Date().toISOString(),
+          publisherName: cleanDisplayName(item.publisherName),
+          publisherId: item.publisherId,
+          privilegeSnapshot: item.privilegeSnapshot,
+          participated: item.participated,
+          hours: item.hours,
+          bibleStudies: item.bibleStudies,
+          auxiliaryPioneer: item.auxiliaryPioneer,
+          notes: item.notes,
+        };
+
+    setReports((prev) => {
+      const exists = prev.some((r) => r.id === officialReport.id);
+      return exists
+        ? prev.map((r) => (r.id === officialReport.id ? officialReport : r))
+        : [officialReport, ...prev];
+    });
+    dbUpsertReports([officialReport]).catch((err) =>
+      notify(`Erro ao confirmar relatório: ${err.message}`, 'error'),
+    );
+
+    setPendingSelfReports((prev) => prev.filter((p) => p.id !== item.id));
+    dbDeletePendingSelfReport(item.id).catch((err) =>
+      notify(`Erro ao limpar fila de pendentes: ${err.message}`, 'error'),
+    );
+
+    notify(`Relatório de ${item.publisherName} confirmado e registrado!`);
+  };
+
+  const handleRejectPendingReport = (id: string) => {
+    setPendingSelfReports((prev) => prev.filter((p) => p.id !== id));
+    dbDeletePendingSelfReport(id).catch((err) =>
+      notify(`Erro ao descartar envio: ${err.message}`, 'error'),
+    );
+    notify('Envio descartado.', 'info');
   };
 
   const handleDeleteReport = (id: string) => {
@@ -1048,16 +1201,26 @@ export default function App() {
     setActiveTab('resposta');
   };
 
+  const pendingConfirmationCount = pendingSelfReports.filter(
+    (p) => p.status === 'pendente',
+  ).length;
+
   const navItems: { key: TabKey; label: string }[] = [
     { key: 'resposta', label: 'Resposta' },
-    { key: 'respostas', label: 'Respostas ao Formulário' },
+    { key: 'respostas', label: 'Respostas' },
     { key: 'cadastro', label: 'Cadastro' },
     { key: 'quem_falta', label: 'Quem Falta' },
     { key: 'grupos', label: 'Por Grupo' },
     { key: 'visitas', label: 'Visitas' },
     { key: 'assistencia', label: 'Assistência' },
     { key: 'cartoes', label: 'Cartões S-21' },
-    { key: 'enviar_relatorio', label: '📱 Enviar Relatório' },
+    {
+      key: 'enviar_relatorio',
+      label:
+        pendingConfirmationCount > 0
+          ? `📱 Enviar Relatório (${pendingConfirmationCount})`
+          : '📱 Enviar Relatório',
+    },
   ];
 
   const activePublishersCount = publishers.filter((p) => p.active).length;
@@ -1065,6 +1228,45 @@ export default function App() {
     (p) => p.active && submittedNormNames.has(normalizeText(p.name)),
   ).length;
   const pendingCount = activePublishersCount - receivedCount;
+
+  // Modo público limpo (quando o publicador abre o link enviado por WhatsApp)
+  if (isPublicSelfReportMode) {
+    return (
+      <div className="min-h-screen bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-100 flex flex-col transition-colors">
+        <div className="max-w-xl w-full mx-auto px-4 pt-4 flex justify-end">
+          <button
+            type="button"
+            onClick={() => setIsDark((prev) => !prev)}
+            aria-label={isDark ? 'Ativar modo claro' : 'Ativar modo escuro'}
+            className="h-9 px-3 text-xs font-medium text-slate-700 dark:text-slate-200 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors flex items-center gap-1.5 cursor-pointer"
+          >
+            {isDark ? <Sun className="w-3.5 h-3.5 text-amber-400" /> : <Moon className="w-3.5 h-3.5 text-slate-600" />}
+            {isDark ? 'Modo Claro' : 'Modo Escuro'}
+          </button>
+        </div>
+
+        <main className="flex-1 max-w-xl w-full mx-auto px-4 py-4">
+          {loadingCloud ? (
+            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-8 text-center text-base text-slate-500 dark:text-slate-400 animate-pulse">
+              Carregando formulário...
+            </div>
+          ) : (
+            <EnviarRelatorioTab
+              monthKey={activeMonth}
+              publishers={publishers}
+              reports={reports}
+              pendingReports={pendingSelfReports}
+              isPublicMode={true}
+              onSubmitReport={handleSubmitSelfReport}
+              onSubmitPublicReport={handleSubmitPublicReport}
+              onConfirmPendingReport={handleConfirmPendingReport}
+              onRejectPendingReport={handleRejectPendingReport}
+            />
+          )}
+        </main>
+      </div>
+    );
+  }
 
   if (!isUnlocked) {
     return (
@@ -1082,21 +1284,21 @@ export default function App() {
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-100 flex flex-col transition-colors">
       <header className="no-print bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 sticky top-0 z-30">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-4">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-3">
           <a
             href="#top"
             onClick={(e) => {
               e.preventDefault();
               setActiveTab('resposta');
             }}
-            className="font-display text-lg font-bold tracking-tight text-slate-900 dark:text-slate-100 whitespace-nowrap shrink-0"
+            className="font-display text-base lg:text-lg font-bold tracking-tight text-slate-900 dark:text-slate-100 whitespace-nowrap shrink-0"
           >
             Relatório Congregação
           </a>
 
           <nav
             aria-label="Abas da planilha"
-            className="hidden md:flex items-center gap-3.5 lg:gap-4 text-xs lg:text-sm font-medium overflow-x-auto"
+            className="hidden md:flex items-center gap-2.5 lg:gap-3.5 text-xs lg:text-sm font-medium overflow-x-auto"
           >
             {navItems.map((item) => {
               const isActive = activeTab === item.key;
@@ -1121,7 +1323,7 @@ export default function App() {
             <button
               type="button"
               onClick={() => openNewReportModal(null, null)}
-              className="h-9 px-4 text-xs font-medium text-white bg-blue-700 dark:bg-blue-600 rounded-md hover:bg-blue-800 dark:hover:bg-blue-500 transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
+              className="h-9 px-3.5 text-xs font-medium text-white bg-blue-700 dark:bg-blue-600 rounded-md hover:bg-blue-800 dark:hover:bg-blue-500 transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
             >
               <Plus className="w-4 h-4" />
               Registrar Atividade
@@ -1353,7 +1555,12 @@ export default function App() {
                   monthKey={activeMonth}
                   publishers={publishers}
                   reports={reports}
+                  pendingReports={pendingSelfReports}
+                  isPublicMode={false}
                   onSubmitReport={handleSubmitSelfReport}
+                  onSubmitPublicReport={handleSubmitPublicReport}
+                  onConfirmPendingReport={handleConfirmPendingReport}
+                  onRejectPendingReport={handleRejectPendingReport}
                 />
               )}
             </>
