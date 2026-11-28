@@ -5,6 +5,8 @@ import {
   GroupVisit,
   GroupVisitStatus,
   MeetingAttendance,
+  PendingSelfReport,
+  PendingSelfReportStatus,
   PortalSettings,
   PrivilegeType,
   Publisher,
@@ -78,6 +80,21 @@ interface DbReportRow {
   bible_studies: number | null;
   auxiliary_pioneer: string;
   notes: string;
+}
+
+interface DbPendingSelfReportRow {
+  id: string;
+  month_key: string;
+  submitted_at: string;
+  publisher_id: string | null;
+  publisher_name: string;
+  privilege_snapshot: string;
+  participated: boolean;
+  hours: number | null;
+  bible_studies: number | null;
+  auxiliary_pioneer: string;
+  notes: string;
+  status: string;
 }
 
 interface DbPortalSettingsRow {
@@ -221,6 +238,42 @@ function mapReportToDb(report: ActivityReport, includeSnapshot = true): DbReport
     base.privilege_snapshot = report.privilegeSnapshot ?? null;
   }
   return base;
+}
+
+function mapPendingSelfReportFromDb(row: DbPendingSelfReportRow): PendingSelfReport {
+  const status: PendingSelfReportStatus =
+    row.status === 'confirmado' || row.status === 'recusado' ? row.status : 'pendente';
+  return {
+    id: row.id,
+    monthKey: row.month_key,
+    submittedAt: row.submitted_at,
+    publisherId: row.publisher_id ?? undefined,
+    publisherName: row.publisher_name,
+    privilegeSnapshot: (row.privilege_snapshot as PrivilegeType) || 'Publicador',
+    participated: row.participated,
+    hours: row.hours,
+    bibleStudies: row.bible_studies,
+    auxiliaryPioneer: (row.auxiliary_pioneer as AuxiliaryPioneerOption) || 'Não',
+    notes: row.notes || '',
+    status,
+  };
+}
+
+function mapPendingSelfReportToDb(item: PendingSelfReport): DbPendingSelfReportRow {
+  return {
+    id: item.id,
+    month_key: item.monthKey,
+    submitted_at: item.submittedAt,
+    publisher_id: item.publisherId ?? null,
+    publisher_name: item.publisherName,
+    privilege_snapshot: item.privilegeSnapshot || 'Publicador',
+    participated: item.participated,
+    hours: item.hours,
+    bible_studies: item.bibleStudies,
+    auxiliary_pioneer: item.auxiliaryPioneer || 'Não',
+    notes: item.notes || '',
+    status: item.status || 'pendente',
+  };
 }
 
 function mapServiceGroupFromDb(row: DbServiceGroupRow): ServiceGroup {
@@ -419,6 +472,30 @@ export async function dbUpsertReports(items: ActivityReport[]): Promise<void> {
 export async function dbDeleteReport(id: string): Promise<void> {
   if (!supabase) return;
   const { error } = await supabase.from('activity_reports').delete().eq('id', id);
+  if (error) throw error;
+}
+
+export async function dbFetchPendingSelfReports(): Promise<PendingSelfReport[]> {
+  if (!supabase) return [];
+  const { data, error } = await supabase
+    .from('pending_self_reports')
+    .select('*')
+    .order('submitted_at', { ascending: false });
+  if (error) throw error;
+  return ((data ?? []) as DbPendingSelfReportRow[]).map(mapPendingSelfReportFromDb);
+}
+
+export async function dbUpsertPendingSelfReport(item: PendingSelfReport): Promise<void> {
+  if (!supabase) return;
+  const { error } = await supabase
+    .from('pending_self_reports')
+    .upsert(mapPendingSelfReportToDb(item), { onConflict: 'id' });
+  if (error) throw error;
+}
+
+export async function dbDeletePendingSelfReport(id: string): Promise<void> {
+  if (!supabase) return;
+  const { error } = await supabase.from('pending_self_reports').delete().eq('id', id);
   if (error) throw error;
 }
 
