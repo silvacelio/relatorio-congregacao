@@ -1,10 +1,22 @@
-import { Check, CheckCheck, Copy, Download, FileText, MessageSquare, Save, Search } from 'lucide-react';
+import {
+  Check,
+  CheckCheck,
+  Copy,
+  Download,
+  FileText,
+  Link2,
+  MessageSquare,
+  Save,
+  Search,
+} from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { ActivityReport, PrivilegeType, Publisher } from '../types';
 import { exportPendingCsv, exportReportToWord } from '../utils/exportData';
 import { formatMonthLabel, normalizeText } from '../utils/formatters';
 import {
+  buildPublisherSelfReportUrl,
   buildReminderWhatsAppUrl,
+  buildSelfReportWhatsAppUrl,
   isValidWhatsAppPhone,
   normalizePhoneDigits,
 } from '../utils/whatsapp';
@@ -158,6 +170,16 @@ export function QuemFaltaTab({
     }
   };
 
+  const handleCopyPublisherLink = async (pub: Publisher) => {
+    const url = buildPublisherSelfReportUrl(pub.id, monthKey);
+    try {
+      await navigator.clipboard.writeText(url);
+      onNotify(`Link pessoal de ${pub.name} copiado para colar no WhatsApp.`, 'success');
+    } catch {
+      onNotify('Não foi possível copiar o link.', 'error');
+    }
+  };
+
   const copyPlainList = async () => {
     if (filteredMissing.length === 0) return;
     const text = filteredMissing.map((p, i) => `${i + 1}. ${p.name}`).join('\n');
@@ -259,7 +281,7 @@ export function QuemFaltaTab({
         </div>
       </section>
 
-      {/* Lista de Pendentes com Cadastro de WhatsApp e Lembrete */}
+      {/* Lista de Pendentes com Cadastro de WhatsApp, Lembrete e Envio do Link */}
       <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg overflow-hidden">
         <div className="p-4 border-b border-slate-200 dark:border-slate-800 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
           <div>
@@ -378,6 +400,8 @@ export function QuemFaltaTab({
                   const isSaving = Boolean(savingIds[pub.id]);
                   const isJustSaved = Boolean(savedIds[pub.id]);
                   const waUrl = buildReminderWhatsAppUrl(phoneDraft);
+                  const selfReportUrl = buildPublisherSelfReportUrl(pub.id, monthKey);
+                  const selfWaUrl = buildSelfReportWhatsAppUrl(phoneDraft, pub.name, selfReportUrl);
                   const normalizedPreview = normalizePhoneDigits(phoneDraft);
 
                   return (
@@ -461,6 +485,34 @@ export function QuemFaltaTab({
                               </>
                             )}
                           </button>
+
+                          {selfWaUrl ? (
+                            <a
+                              href={selfWaUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              onClick={() => {
+                                if (isDirty && !isSaving) {
+                                  void handleSaveNumber(pub);
+                                }
+                              }}
+                              title="Enviar link pessoal pelo WhatsApp para o publicador preencher"
+                              className="h-8 px-2.5 text-xs font-medium text-white bg-indigo-600 hover:bg-indigo-700 dark:bg-indigo-600 dark:hover:bg-indigo-500 rounded transition-colors inline-flex items-center gap-1 whitespace-nowrap shrink-0"
+                            >
+                              <Link2 className="w-3.5 h-3.5" />
+                              Enviar Link
+                            </a>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => handleCopyPublisherLink(pub)}
+                              title="Copiar link pessoal para colar no WhatsApp"
+                              className="h-8 px-2.5 text-xs font-medium text-indigo-800 dark:text-indigo-200 bg-indigo-50 dark:bg-indigo-950/60 border border-indigo-200 dark:border-indigo-800 hover:bg-indigo-100 dark:hover:bg-indigo-900/60 rounded transition-colors inline-flex items-center gap-1 whitespace-nowrap shrink-0 cursor-pointer"
+                            >
+                              <Link2 className="w-3.5 h-3.5" />
+                              Copiar Link
+                            </button>
+                          )}
 
                           {waUrl ? (
                             <a
